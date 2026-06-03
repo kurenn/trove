@@ -26,6 +26,9 @@ interface AppState {
   name: string;
   /** Quick Find global hotkey (Tauri accelerator). */
   quickfindShortcut: string;
+  /** Version string of an available app update (from the updater), else null. */
+  updateVersion: string | null;
+  setUpdateVersion: (v: string | null) => void;
 
   /** Active dataset — mock by default, replaced by the Rust index under Tauri. */
   data: Dataset;
@@ -139,6 +142,7 @@ export const useApp = create<AppState>((set, get) => ({
   tweaks: loadTweaks(),
   name: load(NAME_KEY) || "",
   quickfindShortcut: load(SHORTCUT_KEY) || DEFAULT_SHORTCUT,
+  updateVersion: null,
 
   data: MOCK_DATASET,
   libraries: [],
@@ -162,6 +166,7 @@ export const useApp = create<AppState>((set, get) => ({
   setAccent: (accent) => set((s) => { const tweaks = { ...s.tweaks, accent }; saveTweaks(tweaks); return { tweaks }; }),
 
   setData: (data) => set({ data }),
+  setUpdateVersion: (updateVersion) => set({ updateVersion }),
   setLibraries: (libraries) => set({ libraries }),
   setThumb: (id, url) => set((s) => ({ thumbs: { ...s.thumbs, [id]: url } })),
   applyScanProgress: (p) =>

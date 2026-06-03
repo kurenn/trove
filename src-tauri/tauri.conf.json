@@ -44,8 +44,15 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/kurenn/trove/releases/latest/download/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDczOTE3NDI1RjM0QTA0RkIKUldUN0JFcnpKWFNSY3hJa2VpOFE0RjFFOE1vMVBObEdrNnU1Q1FLQm1pdHdTNnNWWFdlRjVRcW4K"
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",

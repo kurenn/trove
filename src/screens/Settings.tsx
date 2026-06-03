@@ -5,6 +5,7 @@ import { Icon } from "../components/Icons";
 import { useApp } from "../lib/store";
 import { isTauri, api } from "../lib/tauri";
 import { ShortcutField } from "../components/ShortcutField";
+import { checkForUpdate } from "../lib/updater";
 
 type TabId = "profile" | "library" | "appearance" | "advanced";
 
@@ -26,6 +27,14 @@ export function SettingsScreen() {
     if (!libs.length) { toast("No libraries to reindex"); return; }
     toast("Rebuilding index & thumbnails…");
     for (const l of libs) { try { await api.rescanLibraryForce(l.id); } catch { /* ignore */ } }
+  };
+
+  const checkUpdates = async () => {
+    if (!isTauri) { toast("Auto-update is available in the desktop app"); return; }
+    toast("Checking for updates…");
+    const v = await checkForUpdate();
+    if (v) { useApp.getState().setUpdateVersion(v); toast(`Update available: ${v}`); }
+    else toast("You're on the latest version");
   };
 
   const [tab, setTab] = useState<TabId>(
@@ -98,6 +107,7 @@ export function SettingsScreen() {
               <Row t="Usage analytics" d="Share anonymous, self-hosted-only usage stats."><Switch k="analytics" /></Row>
               <Row t="Reindex everything" d="Force a full rescan of every library — rebuilds the search index and regenerates all thumbnails. Use after editing files in place."><button className="btn btn-sm" onClick={reindexAll}><Icon name="refresh" size={15} /> Reindex</button></Row>
               <Row t="Replay first-run setup" d="Walk through the onboarding flow again."><button className="btn btn-sm" onClick={replayOnboarding}><Icon name="sparkles" size={15} /> Replay</button></Row>
+              <Row t="Check for updates" d="Look for a newer signed release and install it in place."><button className="btn btn-sm" onClick={checkUpdates}><Icon name="download" size={15} /> Check now</button></Row>
               <Row t="Version" d="Trove 2.0 · open source"><span className="spool-mono faint">2.0.0</span></Row>
             </div>
           )}

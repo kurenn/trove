@@ -15,9 +15,11 @@ import { DetailScreen } from "./screens/Detail";
 import { StorageScreen } from "./screens/Storage";
 import { SettingsScreen } from "./screens/Settings";
 import { SetupWizard } from "./screens/Setup";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { modelById } from "./data/dataset";
 import { useApp, inkFor } from "./lib/store";
 import { isTauri } from "./lib/tauri";
+import { checkForUpdate } from "./lib/updater";
 
 // Dev-only: render a single mesh file fullscreen (for headless QA screenshots).
 function MeshTest({ mesh, ext }: { mesh: string; ext: string }) {
@@ -72,6 +74,8 @@ export default function App() {
   useEffect(() => {
     if (!isTauri) return;
     useApp.getState().refresh();
+    // Silent auto-check for a newer signed release; surfaces a dismissible banner.
+    checkForUpdate().then((v) => { if (v) useApp.getState().setUpdateVersion(v); });
     // Reflect the backend-registered Quick Find shortcut in the UI.
     import("./lib/tauri").then(({ api }) =>
       api.getQuickfindShortcut().then((acc) => { if (acc) useApp.setState({ quickfindShortcut: acc }); }).catch(() => {})
@@ -164,6 +168,7 @@ export default function App() {
         <Sidebar />
         <div className="main-col">
           <Topbar />
+          <UpdateBanner />
           <div className="content" ref={contentRef}><Screen /></div>
         </div>
       </div>

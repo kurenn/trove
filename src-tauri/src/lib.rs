@@ -18,6 +18,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init());
 
+    // In-app auto-update (signed) + relaunch-after-install. Desktop only.
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_process::init())
+            .plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
     // Global hotkey for Quick Find (desktop only). The handler toggles the
     // launcher window on key-press; the specific accelerator is registered in
     // setup() from saved settings (or the default).

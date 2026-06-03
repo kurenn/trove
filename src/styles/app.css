@@ -37,6 +37,22 @@
 .page-title { font-size: 30px; font-weight: 700; letter-spacing: -.015em; }
 .page-sub { color: var(--ink-2); font-size: 14px; margin-top: 5px; }
 
+/* update-available banner (under the topbar) */
+.update-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 18px; background: var(--accent-soft); color: var(--ink);
+  border-bottom: 1px solid var(--line); font-size: 13.5px;
+}
+.update-banner .ub-text { flex: 1; min-width: 0; }
+.update-banner .ub-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent); color: var(--accent-ink); border: none;
+  padding: 6px 12px; border-radius: var(--r-sm); font-weight: 700; font-size: 12.5px; cursor: pointer;
+}
+.update-banner .ub-btn:hover { filter: brightness(1.05); }
+.update-banner .ub-x { border: none; background: none; color: var(--ink-3); cursor: pointer; display: inline-flex; padding: 4px; border-radius: 6px; }
+.update-banner .ub-x:hover { background: var(--surface-2); color: var(--ink); }
+
 /* modal dialog (new collection, etc.) */
 .modal-scrim { position: fixed; inset: 0; z-index: 200; background: rgba(20,14,8,.42); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 24px; }
 .modal-card { width: min(420px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 22px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.5); }
