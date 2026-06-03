@@ -77,7 +77,21 @@ jobs:
 
             > The `.app.tar.gz` and `.sig` files are for Trove's in-app auto-updater — you don't need to download them.
 
-            **macOS note:** the app is unsigned, so on first launch **right-click → Open** (or System Settings → Privacy & Security → Open Anyway).
+            ---
+
+            ### 🍎 macOS — "Trove is damaged and can't be opened"
+
+            That message is **not** a corrupt download — Trove isn't notarized by Apple yet, so macOS blocks it. To open it:
+
+            1. Drag **Trove.app** from the `.dmg` into your **Applications** folder.
+            2. Open **Terminal** and run:
+               ```
+               xattr -dr com.apple.quarantine /Applications/Trove.app
+               ```
+            3. Open Trove normally. You only need to do this once.
+
+            ### 🪟 Windows
+            SmartScreen may warn "Windows protected your PC" → **More info → Run anyway**.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

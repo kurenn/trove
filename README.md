@@ -57,8 +57,12 @@ Your models are scattered across folders, drives, and a network share — `final
 
 **Download:** grab the latest build for your OS from the [**Releases**](https://github.com/kurenn/trove/releases/latest) page.
 
-- **macOS** — open the `.dmg`, drag Trove to Applications. The app is unsigned, so on first launch **right-click → Open**.
-- **Windows** — run the `.msi` or `-setup.exe`.
+- **macOS** — open the `.dmg` and drag Trove to **Applications**. Trove isn't notarized yet, so macOS may say *"Trove is damaged."* It isn't — clear the download quarantine flag once:
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Trove.app
+  ```
+  Then open it normally. (Apple Silicon → `aarch64.dmg`, Intel → `x64.dmg`.)
+- **Windows** — run the `.msi` or `-setup.exe`. On SmartScreen: **More info → Run anyway**.
 - **Linux** — `.AppImage` (chmod +x and run), `.deb`, or `.rpm`.
 
 On first run, the onboarding walks you through pointing Trove at a folder. That's it.
