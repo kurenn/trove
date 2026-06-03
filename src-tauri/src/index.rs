@@ -516,6 +516,10 @@ fn scan_stream(
 /// low enough to avoid thrashing a single spindle.
 const WALK_THREADS: usize = 16;
 
+/// Bump when the scan/grouping logic changes so installed libraries rebuild once
+/// on the next scan (v2 = subtree model grouping).
+const SCAN_VERSION: i64 = 2;
+
 /// A message from a walker thread to the DB writer.
 /// (Retained for the `bench_walk` benchmark; the live scan uses `collect_tree`.)
 #[allow(dead_code)]
@@ -805,6 +809,16 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
         return;
     }
 
+    // Force a one-time full rebuild when the scan/grouping logic changes (the
+    // incremental mtime fingerprint can't detect that grouping itself changed, so
+    // an upgraded install would otherwise keep stale rows). Per-library marker.
+    let ver_key = format!("scan_version:{lib_id}");
+    let stored_ver: i64 = db.0.lock().ok()
+        .and_then(|c| c.query_row("SELECT value FROM settings WHERE key=?1", params![ver_key], |r| r.get::<_, String>(0)).ok())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let force = force || stored_ver != SCAN_VERSION;
+
     // Load existing fingerprints (model id → dir mtime) for incremental diffing.
     // A forced rescan starts from an empty map so every directory is reprocessed.
     let mut existing_map: HashMap<String, i64> = HashMap::new();
@@ -906,6 +920,12 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
         let _ = conn.execute(
             "UPDATE libraries SET status=?2, last='just now' WHERE id=?1",
             params![lib_id, if watch_on { "watching" } else { "idle" }],
+        );
+        // Mark this library as scanned with the current grouping version (so the
+        // one-time forced rebuild only happens once after an upgrade).
+        let _ = conn.execute(
+            "INSERT INTO settings (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=?2",
+            params![ver_key, SCAN_VERSION.to_string()],
         );
     }
     eprintln!("[scan] {lib_id}: {total} models ({changed} new/changed, {removed} removed)");

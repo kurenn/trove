@@ -1,7 +1,7 @@
 {
   "name": "trove",
   "private": true,
-  "version": "2.0.5",
+  "version": "2.0.6",
   "type": "module",
   "description": "Trove — self-hosted 3D print library (desktop app)",
   "license": "MIT",
