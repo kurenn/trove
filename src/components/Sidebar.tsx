@@ -3,7 +3,34 @@
 import { Icon, Logo, Avatar } from "./Icons";
 import { useDataset } from "../data/dataset";
 import { useApp } from "../lib/store";
+import { api } from "../lib/tauri";
 import type { Route } from "../data/types";
+
+/** Live indexing indicator — visible from any screen while a scan runs. */
+function IndexingCard() {
+  const scan = useApp((s) => s.scan);
+  if (!scan) return null;
+  const previews = scan.phase === "previews";
+  // Soft, decelerating progress (we don't know the total until the walk finishes).
+  const pct = Math.min(96, Math.round(100 * (1 - 1 / (1 + scan.files / 250))));
+  return (
+    <div className="index-card">
+      <div className="index-row">
+        <Icon name="refresh" size={14} className="index-spin" />
+        <span className="index-title">{previews ? "Building previews…" : "Indexing…"}</span>
+        <button className="index-stop" onClick={() => api.cancelScan(scan.libId).catch(() => {})}>Stop</button>
+      </div>
+      <div className="index-sub">
+        {previews
+          ? `${scan.files.toLocaleString()} previews`
+          : `${scan.files.toLocaleString()} files · ${scan.models.toLocaleString()} models`}
+      </div>
+      <div className={"index-bar" + (previews ? " indet" : "")}>
+        <i style={previews ? undefined : { width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
 
 export function Sidebar() {
   const route = useApp((s) => s.route);
@@ -45,6 +72,7 @@ export function Sidebar() {
         ))}
       </nav>
       <div className="sidebar-foot">
+        <IndexingCard />
         <button className="nav-item" onClick={() => nav({ name: "settings" })}>
           <Avatar name={displayName} tone="var(--accent)" size={28} />
           <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}>

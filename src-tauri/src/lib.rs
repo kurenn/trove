@@ -105,6 +105,7 @@ pub fn run() {
             index::list_libraries,
             index::add_library,
             index::rescan_library,
+            index::cancel_scan,
             index::eject_library,
             index::set_watch,
             index::save_thumb,

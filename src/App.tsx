@@ -120,6 +120,9 @@ export default function App() {
       nav({ name: s as never, id } as never);
     }
     if (p.get("search") === "1") setSearchOpen(true);
+    // Dev-only: preview the sidebar indexing indicator (?scan=scanning|previews).
+    const sc = p.get("scan");
+    if (sc) useApp.setState({ scan: { libId: "dev", phase: sc, files: 1240, models: 86 } });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

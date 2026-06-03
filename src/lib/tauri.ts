@@ -32,6 +32,7 @@ export const api = {
   addLibrary: (path: string, name: string | null, options: ScanOptions) =>
     invoke<Library[]>("add_library", { path, name, options }),
   rescanLibrary: (id: string) => invoke<Library[]>("rescan_library", { id }),
+  cancelScan: (id: string) => invoke<void>("cancel_scan", { id }),
   ejectLibrary: (id: string) => invoke<Library[]>("eject_library", { id }),
   setWatch: (id: string, on: boolean) => invoke<Library[]>("set_watch", { id, on }),
   rescanLibraryForce: (id: string) => invoke<Library[]>("rescan_library", { id, force: true }),

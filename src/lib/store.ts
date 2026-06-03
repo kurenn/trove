@@ -50,6 +50,8 @@ interface AppState {
   toggleTheme: () => void;
   setAccent: (hex: string) => void;
 
+  /** Live scan for the sidebar indexing indicator (null when idle). */
+  scan: ScanLive | null;
   setData: (d: Dataset) => void;
   setLibraries: (l: Library[]) => void;
   applyScanProgress: (p: ScanProgress) => void;
@@ -79,6 +81,15 @@ export interface ScanProgress {
   files: number;
   done: boolean;
   cancelled: boolean;
+  phase: string; // "scanning" | "previews" | "done"
+}
+
+/** Live in-flight scan, surfaced in the sidebar indexing indicator. */
+export interface ScanLive {
+  libId: string;
+  phase: string;
+  files: number;
+  models: number;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -148,6 +159,7 @@ export const useApp = create<AppState>((set, get) => ({
   libraries: [],
   loading: false,
   thumbs: {},
+  scan: null,
 
   setPhase: (phase) => set({ phase }),
   nav: (route) => set({ route, sidebarOpen: false }),
@@ -169,14 +181,23 @@ export const useApp = create<AppState>((set, get) => ({
   setUpdateVersion: (updateVersion) => set({ updateVersion }),
   setLibraries: (libraries) => set({ libraries }),
   setThumb: (id, url) => set((s) => ({ thumbs: { ...s.thumbs, [id]: url } })),
-  applyScanProgress: (p) =>
+  applyScanProgress: (p) => {
+    // Update the library row (status/counts) as before…
     set((s) => ({
       libraries: s.libraries.map((l) =>
         l.id === p.libId
           ? { ...l, status: p.done && !p.cancelled ? l.status : "scanning", models: p.models, files: p.files }
           : l
       ),
-    })),
+      // …and drive the live sidebar indicator (cleared when the scan finishes).
+      scan: p.done ? null : { libId: p.libId, phase: p.phase, files: p.files, models: p.models },
+    }));
+    // Completion toast on a successful finish.
+    if (p.done && !p.cancelled) {
+      const lib = get().libraries.find((l) => l.id === p.libId);
+      get().toast(`Indexed ${lib?.models ?? 0} model${(lib?.models ?? 0) === 1 ? "" : "s"}`);
+    }
+  },
   refresh: async () => {
     if (!isTauri) return;
     set({ loading: true });

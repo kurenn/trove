@@ -45,10 +45,15 @@ struct ScanProgress {
     files: u32,
     done: bool,
     cancelled: bool,
+    /// "scanning" (walking + indexing) | "previews" (building image cache) | "done".
+    phase: String,
 }
 
-fn emit_progress(app: &tauri::AppHandle, lib_id: &str, models: u32, files: u32, done: bool, cancelled: bool) {
-    let _ = app.emit("scan-progress", ScanProgress { lib_id: lib_id.to_string(), models, files, done, cancelled });
+fn emit_progress(app: &tauri::AppHandle, lib_id: &str, models: u32, files: u32, done: bool, cancelled: bool, phase: &str) {
+    let _ = app.emit(
+        "scan-progress",
+        ScanProgress { lib_id: lib_id.to_string(), models, files, done, cancelled, phase: phase.to_string() },
+    );
 }
 
 const PRINTABLE: [&str; 5] = ["stl", "3mf", "obj", "step", "stp"];
@@ -788,14 +793,14 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
     if let Ok(conn) = db.0.lock() {
         let _ = conn.execute("UPDATE libraries SET status='scanning' WHERE id=?1", params![lib_id]);
     }
-    emit_progress(app, lib_id, 0, 0, false, false);
+    emit_progress(app, lib_id, 0, 0, false, false, "scanning");
 
     if !root_ok {
         if let Ok(conn) = db.0.lock() {
             let _ = conn.execute("UPDATE libraries SET status='error', last='just now' WHERE id=?1", params![lib_id]);
         }
         eprintln!("[scan] {lib_id}: cannot read {} (permission?)", root.display());
-        emit_progress(app, lib_id, 0, 0, true, false);
+        emit_progress(app, lib_id, 0, 0, true, false, "done");
         let _ = app.emit("dataset-changed", ());
         return;
     }
@@ -833,13 +838,13 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
         file_total += files.len() as u32;
         dirs.insert(p, (files, mt));
         if dirs.len() % 64 == 0 {
-            emit_progress(app, lib_id, 0, file_total, false, false);
+            emit_progress(app, lib_id, 0, file_total, false, false, "scanning");
         }
     }
     let _ = walker.join();
 
     if cancel.load(Ordering::SeqCst) {
-        emit_progress(app, lib_id, 0, file_total, true, true);
+        emit_progress(app, lib_id, 0, file_total, true, true, "done");
         let _ = app.emit("dataset-changed", ());
         return;
     }
@@ -865,7 +870,7 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
             flush_batch(&db.0, lib_id, &mut batch, &counters);
             if changed - last_reload >= 80 {
                 last_reload = changed;
-                emit_progress(app, lib_id, seen.len() as u32, changed, false, false);
+                emit_progress(app, lib_id, seen.len() as u32, changed, false, false, "scanning");
                 let _ = app.emit("dataset-changed", ());
             }
         }
@@ -904,18 +909,21 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
         );
     }
     eprintln!("[scan] {lib_id}: {total} models ({changed} new/changed, {removed} removed)");
-    emit_progress(app, lib_id, total, counters.get().1, true, false);
     let _ = app.emit("dataset-changed", ());
 
     // Build the LOCAL downscaled-image cache last — the library is already
     // browsable, and folder-image thumbnails now fill in without the grid ever
-    // streaming full-resolution originals off a (slow) network share.
+    // streaming full-resolution originals off a (slow) network share. The progress
+    // indicator stays up (phase "previews") until this finishes.
     let thumbs_on = db.0.lock().ok()
         .and_then(|c| c.query_row("SELECT thumbs FROM libraries WHERE id=?1", params![lib_id], |r| r.get::<_, i64>(0)).ok())
         .unwrap_or(1) != 0;
     if thumbs_on {
+        emit_progress(app, lib_id, total, 0, false, false, "previews");
         generate_image_thumbs(app, lib_id, &cancel);
     }
+    // Final tick → clears the indicator + fires the completion toast.
+    emit_progress(app, lib_id, total, counters.get().1, true, false, "done");
 }
 
 /// Downscale each model's folder image (its `preview`) into the local thumbnail
@@ -964,9 +972,11 @@ fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<Atom
                 );
             }
             done += 1;
-            // Let the grid swap placeholders for real previews as they land.
+            // Let the grid swap placeholders for real previews as they land, and
+            // keep the indexing indicator's "Building previews… N" count moving.
             if done % 24 == 0 {
                 let _ = app.emit("dataset-changed", ());
+                emit_progress(app, lib_id, 0, done, false, false, "previews");
             }
         }
     }
@@ -1411,6 +1421,16 @@ pub fn rescan_library(app: tauri::AppHandle, db: State<Db>, id: String, force: O
     spawn_scan(&app, id, path, watch != 0, force.unwrap_or(false));
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     list_libs(&conn).map_err(|e| e.to_string())
+}
+
+/// Stop an in-flight scan for a library without removing it (the Stop button).
+#[tauri::command]
+pub fn cancel_scan(app: tauri::AppHandle, db: State<Db>, id: String) -> Result<(), String> {
+    app.state::<ScanFlags>().cancel(&id);
+    if let Ok(conn) = db.0.lock() {
+        let _ = conn.execute("UPDATE libraries SET status='idle', last='just now' WHERE id=?1", params![id]);
+    }
+    Ok(())
 }
 
 #[tauri::command]
