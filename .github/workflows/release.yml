@@ -55,6 +55,28 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      # Release notes = this version's CHANGELOG.md section + the shared
+      # download/install footer.
+      - name: Build release notes
+        id: notes
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          SECTION=$(awk -v v="$VER" '
+            $0 ~ "^## \\[" v "\\]" {grab=1; next}
+            grab && /^## \[/ {exit}
+            grab {print}
+          ' CHANGELOG.md)
+          {
+            echo "body<<__NOTES_EOF__"
+            echo "## What's new in ${GITHUB_REF_NAME}"
+            if [ -n "$SECTION" ]; then echo "$SECTION"; fi
+            echo ""
+            echo "---"
+            echo ""
+            cat .github/release-footer.md
+            echo "__NOTES_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,33 +87,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Trove ${{ github.ref_name }}"
-          releaseBody: |
-            ## Downloads
-
-            | Platform | Download |
-            |---|---|
-            | 🍎 **macOS — Apple Silicon** (M1/M2/M3/M4) | `Trove_*_aarch64.dmg` |
-            | 🍎 **macOS — Intel** | `Trove_*_x64.dmg` |
-            | 🪟 **Windows** | `Trove_*_x64-setup.exe` (or `Trove_*_x64_en-US.msi`) |
-            | 🐧 **Linux** | `Trove_*_amd64.AppImage`, `.deb`, or `.x86_64.rpm` |
-
-            > The `.app.tar.gz` and `.sig` files are for Trove's in-app auto-updater — you don't need to download them.
-
-            ---
-
-            ### 🍎 macOS — "Trove is damaged and can't be opened"
-
-            That message is **not** a corrupt download — Trove isn't notarized by Apple yet, so macOS blocks it. To open it:
-
-            1. Drag **Trove.app** from the `.dmg` into your **Applications** folder.
-            2. Open **Terminal** and run:
-               ```
-               xattr -dr com.apple.quarantine /Applications/Trove.app
-               ```
-            3. Open Trove normally. You only need to do this once.
-
-            ### 🪟 Windows
-            SmartScreen may warn "Windows protected your PC" → **More info → Run anyway**.
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
