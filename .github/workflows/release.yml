@@ -59,6 +59,7 @@ jobs:
       # download/install footer.
       - name: Build release notes
         id: notes
+        shell: bash # Windows runners default to PowerShell; this script is bash.
         run: |
           VER="${GITHUB_REF_NAME#v}"
           SECTION=$(awk -v v="$VER" '
