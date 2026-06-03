@@ -75,7 +75,7 @@ export default function App() {
     if (!isTauri) return;
     useApp.getState().refresh();
     // Silent auto-check for a newer signed release; surfaces a dismissible banner.
-    checkForUpdate().then((v) => { if (v) useApp.getState().setUpdateVersion(v); });
+    checkForUpdate().then((v) => { if (v) useApp.getState().setUpdateVersion(v); }).catch(() => {});
     // Reflect the backend-registered Quick Find shortcut in the UI.
     import("./lib/tauri").then(({ api }) =>
       api.getQuickfindShortcut().then((acc) => { if (acc) useApp.setState({ quickfindShortcut: acc }); }).catch(() => {})

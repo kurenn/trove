@@ -1,6 +1,6 @@
 /* Settings.tsx — settings tabs. */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "../components/Icons";
 import { useApp } from "../lib/store";
 import { isTauri, api } from "../lib/tauri";
@@ -21,6 +21,13 @@ export function SettingsScreen() {
   const setQfShortcut = useApp((s) => s.setQuickfindShortcut);
   const theme = dark ? "dark" : "light";
 
+  // Real running version (not a hardcoded string), read from the Tauri runtime.
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => {
+    if (!isTauri) { setAppVersion("dev"); return; }
+    import("@tauri-apps/api/app").then(({ getVersion }) => getVersion().then(setAppVersion)).catch(() => {});
+  }, []);
+
   const reindexAll = async () => {
     if (!isTauri) { toast("Reindexing…"); return; }
     const libs = useApp.getState().libraries;
@@ -32,9 +39,14 @@ export function SettingsScreen() {
   const checkUpdates = async () => {
     if (!isTauri) { toast("Auto-update is available in the desktop app"); return; }
     toast("Checking for updates…");
-    const v = await checkForUpdate();
-    if (v) { useApp.getState().setUpdateVersion(v); toast(`Update available: ${v}`); }
-    else toast("You're on the latest version");
+    try {
+      const v = await checkForUpdate();
+      if (v) { useApp.getState().setUpdateVersion(v); toast(`Update available: ${v}`); }
+      else toast("You're on the latest version");
+    } catch {
+      // Don't claim "up to date" when the check itself failed (network, etc.).
+      toast("Couldn't check for updates — try again later");
+    }
   };
 
   const [tab, setTab] = useState<TabId>(
@@ -108,7 +120,7 @@ export function SettingsScreen() {
               <Row t="Reindex everything" d="Force a full rescan of every library — rebuilds the search index and regenerates all thumbnails. Use after editing files in place."><button className="btn btn-sm" onClick={reindexAll}><Icon name="refresh" size={15} /> Reindex</button></Row>
               <Row t="Replay first-run setup" d="Walk through the onboarding flow again."><button className="btn btn-sm" onClick={replayOnboarding}><Icon name="sparkles" size={15} /> Replay</button></Row>
               <Row t="Check for updates" d="Look for a newer signed release and install it in place."><button className="btn btn-sm" onClick={checkUpdates}><Icon name="download" size={15} /> Check now</button></Row>
-              <Row t="Version" d="Trove 2.0 · open source"><span className="spool-mono faint">2.0.0</span></Row>
+              <Row t="Version" d="Trove · open source"><span className="spool-mono faint">{appVersion || "…"}</span></Row>
             </div>
           )}
         </div>

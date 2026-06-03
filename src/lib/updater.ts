@@ -13,23 +13,20 @@ interface DownloadEvent {
   data?: { contentLength?: number; chunkLength?: number };
 }
 
-/** Check the release feed. Returns the new version string if one is available,
-    else null. Never throws (logs + returns null) so callers can fire-and-forget. */
+/** Check the release feed. Returns the new version string if an update is
+    available, or null if already up to date. THROWS on failure (network, feed,
+    config) — so callers can distinguish "up to date" from "couldn't check" rather
+    than silently claiming the app is current. */
 export async function checkForUpdate(): Promise<string | null> {
   if (!isTauri) return null;
-  try {
-    const { check } = await import("@tauri-apps/plugin-updater");
-    const update = await check();
-    if (update) {
-      pending = update as unknown as typeof pending;
-      return update.version;
-    }
-    pending = null;
-    return null;
-  } catch (e) {
-    console.error("update check failed", e);
-    return null;
+  const { check } = await import("@tauri-apps/plugin-updater");
+  const update = await check();
+  if (update) {
+    pending = update as unknown as typeof pending;
+    return update.version;
   }
+  pending = null;
+  return null;
 }
 
 export function hasPendingUpdate(): boolean {
