@@ -1,102 +1,134 @@
+<div align="center">
+
+<img src="assets/logo.png" width="108" alt="Trove" />
+
 # Trove
 
-A self-hosted, **desktop** 3D-print model library. Point it at folders of model
-files (local or network-mounted) and it indexes them **in place** — never moving,
-modifying, uploading, or downloading your files. Browse with a real in-app 3D
-viewer, auto-tagging, fast faceted + command-palette search, and a global
-Spotlight-style launcher, then jump straight to any model's folder.
+### Your 3D-print library, finally organized.
 
-Built from the `design_handoff_trove` reference, recreated as a native app.
+A self-hosted **desktop app** that indexes your STL / 3MF / STEP files **in place** — browse them in a real 3D viewer, search instantly, and summon any model with a global launcher. Nothing is ever moved, modified, uploaded, or downloaded.
 
-## Highlights
+[![Release](https://img.shields.io/github/v/release/kurenn/trove?color=c2693d&label=release)](https://github.com/kurenn/trove/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/kurenn/trove/release.yml?color=c2693d&label=build)](https://github.com/kurenn/trove/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/github/license/kurenn/trove?color=c2693d)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Windows%20·%20Linux-c2693d)
+![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%20v2%20·%20Rust%20·%20React-c2693d)
 
-- **Read-only indexer** — scans your folders with a parallel walker; incremental
-  rescans skip unchanged directories. Your files are never touched.
-- **Real 3D previews** — Three.js viewer for STL / OBJ / 3MF (STEP via lazy
-  `occt-import-js` WASM). Thumbnails render off the main thread in a Web Worker,
-  and folder render images (e.g. `Renders/`) are used as previews when present.
-- **Quick Find** — a frameless, frosted-glass global launcher (default
-  `⌘/Ctrl+Shift+Space`, configurable) that floats over the desktop and searches
-  files + folders via an FTS index, with live preview and one-click "open folder".
-- **Collections** — group models from anywhere in your library (independent of
-  folder structure); rename creators inline.
-- **Runs in the background** — closing the main window keeps Trove resident on
-  macOS so the global hotkey stays live (click the dock icon to bring it back).
-- **Scales** — SQLite/WAL index + on-disk thumbnail cache + a virtualized grid
-  keep multi-thousand-model libraries on slow network shares responsive.
+[**🌐 Website**](https://kurenn.github.io/trove/) &nbsp;·&nbsp; [**⬇️ Download**](https://github.com/kurenn/trove/releases/latest) &nbsp;·&nbsp; [**🧭 Quick start**](#-quick-start)
 
-## Stack
+<br/>
 
-- **Shell:** Tauri v2 (Rust) — small native bundle, native dialogs + OS handoff
-- **Backend:** Rust — `jwalk`/`walkdir` scan, `rusqlite` (SQLite/WAL + FTS5)
-  index, `notify` file-watching, `tauri-plugin-global-shortcut`
-- **Frontend:** React 18 + TypeScript + Vite + Zustand
-- **3D:** Three.js (STL / OBJ / 3MF loaders; STEP via lazy `occt-import-js` WASM)
+<img src="assets/library.png" width="860" alt="Trove library view" />
 
-## Architecture
+</div>
 
-The native side owns the filesystem (scan, watch, SQLite index, Finder handoff).
-The web side owns the UI, Three.js mesh loading, and thumbnail rendering
-(offscreen canvas → PNG, cached to disk by Rust). Model files and cached
-thumbnails are streamed into the webview via Tauri's asset protocol, not JSON IPC.
+---
 
-The dataset lives in the Zustand store, so the UI runs on mock fixtures in a plain
-browser (`npm run dev`) and swaps to the live Rust index under Tauri with no
-call-site changes.
+## Why Trove?
+
+Your models are scattered across folders, drives, and a network share — `final_v3.stl`, a ZIP from a marketplace, a `Renders/` folder you forgot about. Trove points at those folders and turns them into a fast, browsable, **read-only** library. It indexes, auto-tags, renders 3D previews, and gets you to the file — then hands off to your slicer or file manager. **It never touches your files.**
+
+## ✨ Features
+
+- 🗂️ **Read-only indexer** — point it at any folder (local or network-mounted). A parallel walker scans fast; incremental rescans skip unchanged directories. Files stay exactly where they are.
+- 🧊 **Real 3D previews** — an in-app Three.js viewer for STL / OBJ / 3MF (STEP via lazy WASM). Thumbnails render off the main thread in a Web Worker; folder render images (e.g. `Renders/`) are used as previews when present.
+- ⚡ **Quick Find** — a frosted-glass global launcher (default `⌘/Ctrl+Shift+Space`) that floats over your desktop and searches every file + folder via a full-text index, with live preview and one-click *Open folder*.
+- 🏷️ **Smart auto-tagging** — tags inferred from filenames, folder structure, and geometry, with faceted filtering and a `⌘K` command palette.
+- 📚 **Collections** — group models from anywhere in your library, independent of how they're stored on disk.
+- 🔄 **Auto-updates** — signed in-app updates delivered through GitHub Releases. Stay current with one click.
+- 🌙 **Light & dark**, runs in the **background** so the global hotkey is always a keypress away, and **scales** to thousands of models on slow shares (SQLite index + thumbnail cache + virtualized grid).
+
+> 🔒 **Self-hosted & private.** No accounts, no cloud, no telemetry. Trove only ever *reads* your files.
+
+## 📸 Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/detail.png" alt="Model detail" /><br/><sub><b>Model detail</b> — live 3D viewer, dimensions, parts, collections, and one-click folder access.</sub></td>
+    <td width="50%"><img src="assets/launcher.png" alt="Quick Find launcher" /><br/><sub><b>Quick Find</b> — a global launcher that searches your whole library from anywhere.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/collections.png" alt="Collections" /><br/><sub><b>Collections</b> — curate groups of models across folders.</sub></td>
+    <td width="50%"><img src="assets/library-dark.png" alt="Dark mode" /><br/><sub><b>Dark mode</b> — the full library, your way.</sub></td>
+  </tr>
+</table>
+
+## 🚀 Quick start
+
+**Download:** grab the latest build for your OS from the [**Releases**](https://github.com/kurenn/trove/releases/latest) page.
+
+- **macOS** — open the `.dmg`, drag Trove to Applications. The app is unsigned, so on first launch **right-click → Open**.
+- **Windows** — run the `.msi` or `-setup.exe`.
+- **Linux** — `.AppImage` (chmod +x and run), `.deb`, or `.rpm`.
+
+On first run, the onboarding walks you through pointing Trove at a folder. That's it.
+
+## 🛠️ Build from source
+
+Requires **Node 18+** and the **Rust** toolchain ([Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/)).
+
+```bash
+git clone https://github.com/kurenn/trove.git
+cd trove
+npm install
+
+npm run dev          # web UI on mock data (http://localhost:1420)
+npm run tauri dev    # full desktop app against the real index
+npm run tauri build  # → src-tauri/target/release/bundle/ (.app + .dmg, .msi, .AppImage…)
+```
+
+Run the backend tests with `cd src-tauri && cargo test` (indexer scan, incremental rescan, tagging, helpers).
+
+<details>
+<summary>Dev helpers</summary>
+
+Gated on `import.meta.env.DEV`:
+- Deep-link any screen: `?s=model&id=m4`, `?dark=1`, `?search=1`, `?phase=setup`
+- Render a single mesh file: `?mesh=/path.stl&ext=stl`
+- Auto-mount a folder at boot: `TROVE_DEV_MOUNT="/path/to/library" npm run tauri dev`
+- Replay onboarding: `VITE_FORCE_ONBOARDING=1 npm run tauri dev`
+</details>
+
+## 🧱 Architecture
+
+The **native side (Rust)** owns the filesystem — scanning, file-watching, the SQLite index, and OS handoff. The **web side (React)** owns the UI, Three.js mesh loading, and thumbnail rendering (offscreen canvas → PNG, cached to disk by Rust). Model files and thumbnails stream into the webview via Tauri's asset protocol, not JSON IPC.
+
+The dataset lives in a Zustand store, so the UI runs on mock fixtures in a plain browser (`npm run dev`) and swaps to the live Rust index under Tauri with no call-site changes.
 
 ```
 src/                     React/TS frontend
-  data/      types, mock fixtures, reactive dataset helpers
-  lib/       store (Zustand), Tauri bridge
-  three/     geometries, Viewer3D, mesh loaders, Web Worker, thumbnail generator
-  components/ Sidebar, Topbar, SearchModal (⌘K), cards, filters, icons
-  screens/   Library, Detail, Search, Collections, Creators, Favorites, Storage, Settings, Setup
-  Launcher.tsx  the Quick Find global launcher (its own window)
+  data/        types, mock fixtures, reactive dataset helpers
+  lib/         store (Zustand), Tauri bridge, updater
+  three/       geometries, Viewer3D, mesh loaders, Web Worker, thumbnails
+  components/  Sidebar, Topbar, ⌘K palette, cards, UpdateBanner, icons
+  screens/     Library, Detail, Search, Collections, Creators, …, Setup
+  Launcher.tsx the Quick Find global launcher (its own window)
 src-tauri/               Rust backend
   src/index.rs     scan walker, auto-tagging, dataset assembly, commands
-  src/db.rs        SQLite schema
+  src/db.rs        SQLite schema (WAL + FTS5)
   src/watch.rs     debounced file watching
   src/quickfind.rs global shortcut + launcher window control
 ```
 
-## Install
+**Stack:** Tauri v2 · Rust (`jwalk`/`walkdir`, `rusqlite`, `notify`) · React 18 + TypeScript + Vite + Zustand · Three.js (+ `occt-import-js` WASM for STEP).
 
-Grab a build from the [Releases](../../releases) page (macOS `.dmg`), or build it
-yourself (below). Trove is unsigned, so on first launch macOS may require
-right-click → **Open**.
+## 🔁 How updates ship
 
-## Develop
+Bump the version, tag, and push — CI builds + signs every platform and publishes a GitHub Release; installed apps pick it up automatically.
 
 ```bash
-npm install
-npm run dev            # web UI on mock data (http://localhost:1420)
-npm run tauri dev      # full desktop app against the real index
+# bump version in tauri.conf.json, package.json, src-tauri/Cargo.toml, then:
+git tag v2.1.0 && git push origin v2.1.0
 ```
 
-Dev helpers (gated on `import.meta.env.DEV`):
-- Deep-link any screen for QA: `?s=model&id=m4`, `?dark=1`, `?search=1`, `?phase=setup`
-- Render a single mesh file: `?mesh=/path.stl&ext=stl`
-- Auto-mount a folder at boot: `TROVE_DEV_MOUNT="/path/to/library" npm run tauri dev`
-- Replay onboarding: `VITE_FORCE_ONBOARDING=1 npm run tauri dev`
+## 🗺️ Out of scope for v1
 
-## Build
+ActivityPub federation and a public library page; the prototype's four visual "directions" (ships the Hearth direction, light/dark); print-time / filament estimation — Trove never slices, so real models show file-derived facts instead.
 
-```bash
-npm run tauri build    # → src-tauri/target/release/bundle/ (.app + .dmg on macOS)
-```
+## 🤝 Contributing
 
-## Tests
+Issues and PRs are welcome. Building locally is just `npm install` + `npm run tauri dev`.
 
-```bash
-cd src-tauri && cargo test    # indexer scan, incremental rescan, tagging, helpers
-```
+## 📄 License
 
-## Out of scope for v1
-
-ActivityPub federation and a public library page; the four visual "directions"
-from the prototype (ships the Hearth direction only, with light/dark); print-time /
-filament estimation (Trove never slices — real models show file-derived facts).
-
-## License
-
-[MIT](LICENSE) © Spoolr.
+[MIT](LICENSE) © Spoolr. &nbsp;·&nbsp; Inspired by the self-hosted-library concept popularized by [Manyfold](https://manyfold.app).
