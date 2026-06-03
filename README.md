@@ -14,7 +14,7 @@ A self-hosted **desktop app** that indexes your STL / 3MF / STEP files **in plac
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Windows%20·%20Linux-c2693d)
 ![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%20v2%20·%20Rust%20·%20React-c2693d)
 
-[**🌐 Website**](https://kurenn.github.io/trove/) &nbsp;·&nbsp; [**⬇️ Download**](https://github.com/kurenn/trove/releases/latest) &nbsp;·&nbsp; [**🧭 Quick start**](#-quick-start)
+[**🌐 Website**](https://trove.spoolr.io) &nbsp;·&nbsp; [**⬇️ Download**](https://github.com/kurenn/trove/releases/latest) &nbsp;·&nbsp; [**🧭 Quick start**](#-quick-start)
 
 <br/>
 
