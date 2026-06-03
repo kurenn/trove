@@ -1,7 +1,7 @@
 name: Release
 
-# Build signed-less desktop bundles for every platform when a version tag is
-# pushed (e.g. `git tag v2.0.0 && git push --tags`), and attach them to a draft
+# Build signed desktop bundles for every platform when a version tag is pushed
+# (e.g. `git tag v2.1.0 && git push origin v2.1.0`) and attach them to a draft
 # GitHub Release. Trigger manually too via the Actions tab.
 on:
   push:
@@ -9,7 +9,59 @@ on:
   workflow_dispatch:
 
 jobs:
-  release:
+  # Create the draft release ONCE (notes from CHANGELOG.md + shared footer), so the
+  # per-platform build jobs upload into it instead of racing to create it.
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release notes
+        id: notes
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          SECTION=$(awk -v v="$VER" '
+            $0 ~ "^## \\[" v "\\]" {grab=1; next}
+            grab && /^## \[/ {exit}
+            grab {print}
+          ' CHANGELOG.md)
+          {
+            echo "body<<__NOTES_EOF__"
+            echo "## What's new in ${GITHUB_REF_NAME}"
+            if [ -n "$SECTION" ]; then echo "$SECTION"; fi
+            echo ""
+            echo "---"
+            echo ""
+            cat .github/release-footer.md
+            echo "__NOTES_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        id: create
+        uses: actions/github-script@v7
+        env:
+          TAG: ${{ github.ref_name }}
+          BODY: ${{ steps.notes.outputs.body }}
+        with:
+          script: |
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: process.env.TAG,
+              name: `Trove ${process.env.TAG}`,
+              body: process.env.BODY,
+              draft: true,
+              prerelease: false,
+            });
+            return data.id;
+
+  build:
+    needs: create-release
     permissions:
       contents: write
     strategy:
@@ -55,29 +107,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      # Release notes = this version's CHANGELOG.md section + the shared
-      # download/install footer.
-      - name: Build release notes
-        id: notes
-        shell: bash # Windows runners default to PowerShell; this script is bash.
-        run: |
-          VER="${GITHUB_REF_NAME#v}"
-          SECTION=$(awk -v v="$VER" '
-            $0 ~ "^## \\[" v "\\]" {grab=1; next}
-            grab && /^## \[/ {exit}
-            grab {print}
-          ' CHANGELOG.md)
-          {
-            echo "body<<__NOTES_EOF__"
-            echo "## What's new in ${GITHUB_REF_NAME}"
-            if [ -n "$SECTION" ]; then echo "$SECTION"; fi
-            echo ""
-            echo "---"
-            echo ""
-            cat .github/release-footer.md
-            echo "__NOTES_EOF__"
-          } >> "$GITHUB_OUTPUT"
-
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -86,9 +115,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Trove ${{ github.ref_name }}"
-          releaseBody: ${{ steps.notes.outputs.body }}
-          releaseDraft: true
-          prerelease: false
+          # Upload into the release created above — no create-race between jobs.
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
