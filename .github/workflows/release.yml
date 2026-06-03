@@ -65,7 +65,19 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Trove ${{ github.ref_name }}"
-          releaseBody: "Desktop builds are attached below. The app is unsigned — on macOS, right-click the app and choose Open on first launch."
+          releaseBody: |
+            ## Downloads
+
+            | Platform | Download |
+            |---|---|
+            | 🍎 **macOS — Apple Silicon** (M1/M2/M3/M4) | `Trove_*_aarch64.dmg` |
+            | 🍎 **macOS — Intel** | `Trove_*_x64.dmg` |
+            | 🪟 **Windows** | `Trove_*_x64-setup.exe` (or `Trove_*_x64_en-US.msi`) |
+            | 🐧 **Linux** | `Trove_*_amd64.AppImage`, `.deb`, or `.x86_64.rpm` |
+
+            > The `.app.tar.gz` and `.sig` files are for Trove's in-app auto-updater — you don't need to download them.
+
+            **macOS note:** the app is unsigned, so on first launch **right-click → Open** (or System Settings → Privacy & Security → Open Anyway).
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
