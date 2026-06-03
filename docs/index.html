@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" style="--accent: #c2693d;"><head>
+
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trove — your 3D-print library, finally organized</title>
+<link rel="stylesheet" href="landing.css">
+<link rel="stylesheet" href="app-mock.css">
+<script>
+window.__TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accent": "#c2693d",
+  "theme": "dark",
+  "wall": "dusk",
+  "headline": "organized"
+}/*EDITMODE-END*/;
+(function () {
+  var d = window.__TWEAK_DEFAULTS || {}, r = document.documentElement;
+  if (d.theme) r.setAttribute("data-theme", d.theme);
+  if (d.accent) r.style.setProperty("--accent", d.accent);
+})();
+</script>
+<style data-designer-overlay="1"></style></head>
+<body>
+
+<!-- ===================== NAV ===================== -->
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a class="logo" href="#top" aria-label="Trove home">
+      <span class="mark" data-mark="" data-stamped="1"><svg width="100%" height="100%" viewBox="0 0 32 32" fill="none" aria-hidden="true" style="display:block"><rect x="1" y="1" width="30" height="30" rx="9" fill="var(--accent)"></rect><g stroke="var(--accent-ink)" stroke-width="2" fill="none" stroke-linejoin="round" stroke-linecap="round"><path d="M16 6 L25 13.5 L16 26 L7 13.5 Z"></path><path d="M7 13.5 H25"></path><path d="M16 6 L12.5 13.5 L16 26"></path><path d="M16 6 L19.5 13.5 L16 26"></path></g></svg></span>
+      <span class="ltext"><b>trove</b><span>by spoolr.io</span></span>
+    </a>
+    <nav class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#quickfind">Quick Find</a>
+      <a href="#how">How it works</a>
+      <a href="#opensource">Open source</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="btn btn-sm btn-ghost" href="#opensource"><span data-icon="star" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 3l2.6 6.3L21 9.8l-5 4.3 1.6 6.6L12 17l-5.6 3.7L8 14.1l-5-4.3 6.4-.5L12 3Z"></path></svg></span> GitHub</a>
+      <a class="btn btn-sm btn-primary" href="#get-started">Download</a>
+    </div>
+  </div>
+</header>
+
+<!-- ===================== HERO ===================== -->
+<main id="top">
+<section class="hero">
+  <div class="hero-glow" id="heroGlow" style="transform: translateX(-50%) translateY(0px);"></div>
+  <div class="wrap">
+    <span class="eyebrow center reveal" style="opacity: 1; transform: none; will-change: auto;">A desktop app · Mac, Windows &amp; Linux</span>
+    <h1 class="reveal d1" style="opacity: 1; transform: none; will-change: auto;">Your 3D-print library, <span class="accent">finally organized.</span></h1>
+    <p class="hero-sub reveal d2" style="opacity: 1; transform: none; will-change: auto;">Point Trove at the folders you already have. It indexes every STL, 3MF and STEP <em>in place</em> — auto-tagged, instantly searchable, and ready to inspect in a real built-in 3D viewer. Nothing is moved, uploaded, or touched.</p>
+    <div class="hero-actions reveal d2" style="opacity: 1; transform: none; will-change: auto;">
+      <a class="btn btn-primary" href="#get-started"><span data-icon="download" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 3v12"></path><path d="M7 11l5 5 5-5"></path><path d="M5 21h14"></path></svg></span> Download free</a>
+      <a class="btn" href="#quickfind"><span data-icon="search" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"></path><path d="M21 21l-4.3-4.3"></path></svg></span> See Quick Find</a>
+    </div>
+    <div class="hero-note reveal d3" style="opacity: 1; transform: none; will-change: auto;">
+      <span><span data-icon="lock" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 11h14v10H5z"></path><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg></span> Files never leave your machine</span>
+      <span><span data-icon="download" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 3v12"></path><path d="M7 11l5 5 5-5"></path><path d="M5 21h14"></path></svg></span> Installs in seconds</span>
+      <span><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span> No account, no cloud</span>
+    </div>
+  </div>
+
+  <!-- recreated Trove library window -->
+  <div class="wrap">
+    <div class="hero-stage reveal d3" style="opacity: 1; transform: none; will-change: auto;">
+      <div class="app-window" id="heroWindow" style="transform: rotateX(11deg) translateY(0px);">
+        <!-- sidebar -->
+        <aside class="aw-side">
+          <div class="aw-logo">
+            <span class="mark" data-mark="" data-stamped="1"><svg width="100%" height="100%" viewBox="0 0 32 32" fill="none" aria-hidden="true" style="display:block"><rect x="1" y="1" width="30" height="30" rx="9" fill="var(--accent)"></rect><g stroke="var(--accent-ink)" stroke-width="2" fill="none" stroke-linejoin="round" stroke-linecap="round"><path d="M16 6 L25 13.5 L16 26 L7 13.5 Z"></path><path d="M7 13.5 H25"></path><path d="M16 6 L12.5 13.5 L16 26"></path><path d="M16 6 L19.5 13.5 L16 26"></path></g></svg></span>
+            <div><b>trove</b><span>by spoolr.io</span></div>
+          </div>
+          <nav class="aw-nav">
+            <a class="active"><span data-icon="grid" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M4 4h7v7H4z"></path><path d="M13 4h7v7h-7z"></path><path d="M4 13h7v7H4z"></path><path d="M13 13h7v7h-7z"></path></svg></span> Library <span class="count">12</span></a>
+            <a><span data-icon="search" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"></path><path d="M21 21l-4.3-4.3"></path></svg></span> Search</a>
+            <a><span data-icon="heart" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 20s-7-4.6-9.3-9A4.8 4.8 0 0 1 12 6a4.8 4.8 0 0 1 9.3 5C19 15.4 12 20 12 20Z"></path></svg></span> Favorites <span class="count">6</span></a>
+            <a><span data-icon="layers" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 3 2 8l10 5 10-5-10-5Z"></path><path d="M2 13l10 5 10-5"></path><path d="M2 18l10 5 10-5"></path></svg></span> Collections <span class="count">5</span></a>
+            <a><span data-icon="user" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"></path><path d="M4 21a8 8 0 0 1 16 0"></path></svg></span> Creators <span class="count">5</span></a>
+            <a><span data-icon="server" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M4 5h16v6H4z"></path><path d="M4 13h16v6H4z"></path><path d="M8 8h.01"></path><path d="M8 16h.01"></path></svg></span> Libraries</a>
+          </nav>
+          <div class="aw-side-label">Collections</div>
+          <div class="aw-coll"><span class="dot" style="background:#9a5b7a"></span> Tabletop &amp; Terrain <span class="count">3</span></div>
+          <div class="aw-coll"><span class="dot" style="background:#c06b2e"></span> Desk Organizers <span class="count">2</span></div>
+          <div class="aw-coll"><span class="dot" style="background:#5b7a86"></span> Articulated <span class="count">4</span></div>
+          <div class="aw-side-foot">
+            <span class="av">AM</span>
+            <div class="who"><b>Alex Maker</b><span>local profile · mylab.local</span></div>
+          </div>
+        </aside>
+        <!-- main -->
+        <div class="aw-main">
+          <div class="aw-top">
+            <div class="aw-search"><span data-icon="search" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"></path><path d="M21 21l-4.3-4.3"></path></svg></span> Search models, tags, creators… <span class="kbd">⌘K</span></div>
+            <div class="spacer"></div>
+            <div class="aw-iconbtn"><span data-icon="moon" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path></svg></span></div>
+            <div class="aw-iconbtn"><span data-icon="bell" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg></span></div>
+            <div class="aw-mount"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span> Mount folder</div>
+          </div>
+          <div class="aw-content">
+            <div class="aw-content-head">
+              <h3>Library</h3>
+              <span class="sub">12 models · newest first</span>
+              <div class="spacer"></div>
+              <div class="aw-pill"><span data-icon="filter" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5Z"></path></svg></span> Filters</div>
+              <div class="aw-seg"><span class="s on"><span data-icon="grid" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M4 4h7v7H4z"></path><path d="M13 4h7v7h-7z"></path><path d="M4 13h7v7H4z"></path><path d="M13 13h7v7h-7z"></path></svg></span></span><span class="s"><span data-icon="rows" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path></svg></span></span></div>
+            </div>
+            <div class="aw-grid" id="heroGrid"><div class="mcard"><div class="thumb"><div class="scene" style="--c:#6f8c5a"><div class="cube25" style="position:relative"></div></div><div class="heart on"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 20s-7-4.6-9.3-9A4.8 4.8 0 0 1 12 6a4.8 4.8 0 0 1 9.3 5C19 15.4 12 20 12 20Z"></path></svg></div><div class="badge">3 parts</div></div><div class="meta"><div class="mtitle">Hex Planter Trio</div><div class="mcreator"><span class="ca" style="background:#9a5b7a">MV</span> M. V.</div><div class="mtags"><span class="t">planter</span><span class="t">garden</span></div></div></div><div class="mcard"><div class="thumb"><div class="scene" style="--c:#9a5b7a"><div class="obj-gem" style="position:relative"></div></div><div class="heart"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 20s-7-4.6-9.3-9A4.8 4.8 0 0 1 12 6a4.8 4.8 0 0 1 9.3 5C19 15.4 12 20 12 20Z"></path></svg></div><div class="badge">STL</div></div><div class="meta"><div class="mtitle">Polyhedral Dice Set</div><div class="mcreator"><span class="ca" style="background:#c2693d">DK</span> D. K.</div><div class="mtags"><span class="t">dice</span><span class="t">tabletop</span></div></div></div><div class="mcard"><div class="thumb"><div class="scene" style="--c:#c2693d"><div class="cube25" style="position:relative"></div></div><div class="heart"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 20s-7-4.6-9.3-9A4.8 4.8 0 0 1 12 6a4.8 4.8 0 0 1 9.3 5C19 15.4 12 20 12 20Z"></path></svg></div><div class="badge">3MF</div></div><div class="meta"><div class="mtitle">Modular Desk Tray</div><div class="mcreator"><span class="ca" style="background:#6f8c5a">AM</span> A. M.</div><div class="mtags"><span class="t">desk</span><span class="t">organizer</span></div></div></div><div class="mcard"><div class="thumb"><div class="scene" style="--c:#b5604f"><div class="obj-cyl" style="position:relative"></div></div><div class="heart on"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 20s-7-4.6-9.3-9A4.8 4.8 0 0 1 12 6a4.8 4.8 0 0 1 9.3 5C19 15.4 12 20 12 20Z"></path></svg></div><div class="badge">STL</div></div><div class="meta"><div class="mtitle">Tapered Spiral Vase</div><div class="mcreator"><span class="ca" style="background:#5b7a86">RP</span> R. P.</div><div class="mtags"><span class="t">vase</span><span class="t">decor</span></div></div></div><div class="mcard"><div class="thumb"><div class="scene" style="--c:#5b7a86"><div class="obj-ring" style="position:relative"></div></div><div class="heart"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 20s-7-4.6-9.3-9A4.8 4.8 0 0 1 12 6a4.8 4.8 0 0 1 9.3 5C19 15.4 12 20 12 20Z"></path></svg></div><div class="badge">STEP</div></div><div class="meta"><div class="mtitle">Planetary Gearbox</div><div class="mcreator"><span class="ca" style="background:#c06b2e">JT</span> J. T.</div><div class="mtags"><span class="t">mechanical</span><span class="t">gears</span></div></div></div><div class="mcard"><div class="thumb"><div class="scene" style="--c:#c06b2e"><div class="obj-hex" style="position:relative"></div></div><div class="heart"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 20s-7-4.6-9.3-9A4.8 4.8 0 0 1 12 6a4.8 4.8 0 0 1 9.3 5C19 15.4 12 20 12 20Z"></path></svg></div><div class="badge">OBJ</div></div><div class="meta"><div class="mtitle">Low-Poly Fox</div><div class="mcreator"><span class="ca" style="background:#9a5b7a">EL</span> E. L.</div><div class="mtags"><span class="t">figurine</span><span class="t">low-poly</span></div></div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== TRUST STRIP ===================== -->
+<section class="trust">
+  <div class="wrap">
+    <div class="trust-item reveal" style="opacity: 0; transform: translateY(28px);"><div class="num"><span data-count="100">0</span><small>%</small></div><div class="lbl"><b>indexed in place.</b> Trove reads your files where they live — never copies or moves them.</div></div>
+    <div class="trust-item reveal d1" style="opacity: 0; transform: translateY(28px);"><div class="num"><span data-count="8">0</span></div><div class="lbl"><b>formats understood</b> — STL, 3MF, OBJ, STEP, plus project &amp; source files alongside.</div></div>
+    <div class="trust-item reveal d2" style="opacity: 0; transform: translateY(28px);"><div class="num">∞</div><div class="lbl"><b>folders, zero limits.</b> Watch as many folders on your drives as you like — they update live.</div></div>
+    <div class="trust-item reveal d3" style="opacity: 0; transform: translateY(28px);"><div class="num">0<small>$</small></div><div class="lbl"><b>forever.</b> Free, and runs entirely on your own machine — nothing in the cloud.</div></div>
+  </div>
+</section>
+
+<!-- ===================== FEATURES ===================== -->
+<section class="section" id="features">
+  <div class="wrap">
+    <div class="section-head center reveal" style="opacity: 0; transform: translateY(28px);">
+      <span class="eyebrow center">Built for makers</span>
+      <h2>Three things every print library should do.</h2>
+      <p>Trove is an original reimagining of the model manager — focused on the parts that actually slow you down: seeing what a file is, finding it again, and keeping it tidy without lifting a finger.</p>
+    </div>
+    <div class="features">
+      <!-- 3D viewer -->
+      <article class="feature reveal" style="opacity: 0; transform: translateY(28px);">
+        <div class="ficon"><span data-icon="cube" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 2 3 7v10l9 5 9-5V7l-9-5Z"></path><path d="M3 7l9 5 9-5"></path><path d="M12 12v10"></path></svg></span></div>
+        <h3>A real 3D viewer</h3>
+        <p>Rotate, zoom and measure every model right in the browser — no slicer round-trip just to remember what a file is.</p>
+        <div class="fviz">
+          <div class="viewer">
+            <div class="vhint"><span data-icon="refresh" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg></span> drag to rotate</div>
+            <div class="vlabel">d20.stl</div>
+            <div class="stage" style="perspective:520px"><div class="cube3d" id="viewerCube" style="--c: #9a5b7a; transform: rotateX(-18deg) rotateY(79.32deg);"><span class="face fr"></span><span class="face bk"></span><span class="face rt"></span><span class="face lf"></span><span class="face tp"></span><span class="face bt"></span></div></div>
+            <div class="vtools"><span class="vt on"><span data-icon="refresh" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg></span> Rotate</span><span class="vt"><span data-icon="ruler" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 3h4v18H5z"></path><path d="M9 7h4"></path><path d="M9 11h4"></path><path d="M9 15h4"></path><path d="M13 3h6v6"></path><path d="M13 21h6v-6"></path></svg></span> Measure</span></div>
+            <div class="dims"><span class="d">32×32×31 mm</span></div>
+          </div>
+        </div>
+      </article>
+      <!-- auto-tagging -->
+      <article class="feature reveal d1" style="opacity: 0; transform: translateY(28px);">
+        <div class="ficon"><span data-icon="sparkles" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 3l1.8 4.7L18.5 9l-4.7 1.8L12 15l-1.8-4.2L5.5 9l4.7-1.3L12 3Z"></path><path d="M18 14l.9 2.3L21 17l-2.1.7L18 20l-.9-2.3L15 17l2.1-.7L18 14Z"></path></svg></span></div>
+        <h3>Smart auto-tagging</h3>
+        <p>On scan, models are grouped into creators and collections and tagged automatically — so your library organizes itself.</p>
+        <div class="fviz">
+          <div class="viewer" style="aspect-ratio:1.5;display:flex;align-items:center;justify-content:center;padding:22px">
+            <div class="tagcloud">
+              <span class="tg hot">tabletop <span class="pct">98%</span></span>
+              <span class="tg">dice</span>
+              <span class="tg hot">support-free <span class="pct">94%</span></span>
+              <span class="tg">d20</span>
+              <span class="tg">resin</span>
+              <span class="tg hot">polyhedral</span>
+              <span class="tg">gaming</span>
+              <span class="tg">sharp-edge</span>
+            </div>
+          </div>
+        </div>
+      </article>
+      <!-- search -->
+      <article class="feature reveal d2" style="opacity: 0; transform: translateY(28px);">
+        <div class="ficon"><span data-icon="search" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"></path><path d="M21 21l-4.3-4.3"></path></svg></span></div>
+        <h3>Search that keeps up</h3>
+        <p>A ⌘K command palette inside the app, plus a global Quick Find launcher that floats over everything to jump to any file in keystrokes.</p>
+        <div class="fviz">
+          <div class="viewer" style="aspect-ratio:1.5;background:var(--surface-2);padding:16px;display:flex;flex-direction:column;gap:8px;justify-content:center">
+            <div class="aw-search" style="max-width:none;background:var(--surface)"><span data-icon="search" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"></path><path d="M21 21l-4.3-4.3"></path></svg></span> gear<span class="cursor" style="display:inline-block;width:2px;height:16px;background:var(--accent);vertical-align:-3px"></span></div>
+            <div class="lz-row active" style="--glass-active:var(--accent-soft);--glass-active-bd:var(--accent)"><span class="ico ftype" style="background:#5b7a86">STEP</span><div><div class="nm mono"><span class="hl">gear</span>box-planetary.step</div><div class="sub"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span> Planetary Gearbox · 4.2 MB</div></div></div>
+            <div class="lz-row"><span class="ico ftype" style="background:#6f8c5a">STL</span><div><div class="nm mono"><span class="hl">gear</span>-spur-20t.stl</div><div class="sub"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span> Modular Desk Tray · 1.1 MB</div></div></div>
+          </div>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== QUICK FIND SHOWCASE ===================== -->
+<section class="section" id="quickfind" style="padding-top:0">
+  <div class="wrap">
+    <div class="row">
+      <div class="row-copy reveal" style="opacity: 0; transform: translateY(28px);">
+        <span class="eyebrow">Quick Find</span>
+        <h2>One keystroke from anywhere on your desk.</h2>
+        <p>Summon a Spotlight-style launcher over a frosted-glass backdrop and search your whole library by file name or folder. A live preview shows the model, its full on-disk path, and one-click actions.</p>
+        <ul class="row-list">
+          <li><span class="ck"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span><span><b>Type &amp; jump.</b> <span class="muted">Prefix matches first, STL ahead of the rest — capped to what matters.</span></span></li>
+          <li><span class="ck"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span><span><b>Open in your slicer</b> <span class="muted">or reveal the folder in your file manager, straight from the preview.</span></span></li>
+          <li><span class="ck"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span><span><b>Copy the real path.</b> <span class="muted">Every result maps to an actual file on disk — no abstractions.</span></span></li>
+        </ul>
+      </div>
+      <div class="row-media reveal d1" style="opacity: 0; transform: translateY(28px);">
+        <div class="launcher-stage" data-wall="dusk">
+          <div class="wall"></div>
+          <div class="scrim"></div>
+          <div class="lz-topbar"><span class="mark" data-mark="" data-stamped="1"><svg width="100%" height="100%" viewBox="0 0 32 32" fill="none" aria-hidden="true" style="display:block"><rect x="1" y="1" width="30" height="30" rx="9" fill="var(--accent)"></rect><g stroke="var(--accent-ink)" stroke-width="2" fill="none" stroke-linejoin="round" stroke-linecap="round"><path d="M16 6 L25 13.5 L16 26 L7 13.5 Z"></path><path d="M7 13.5 H25"></path><path d="M16 6 L12.5 13.5 L16 26"></path><path d="M16 6 L19.5 13.5 L16 26"></path></g></svg></span> Trove <span class="sep">·</span> Library <span class="spacer"></span><span class="qf">⌘K Quick Find</span><span class="clock" id="lzClock">13:57</span></div>
+          <div class="launcher" id="launcher">
+            <div class="lz-search"><span data-icon="search" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"></path><path d="M21 21l-4.3-4.3"></path></svg></span><span class="q"><span id="lzQuery"></span><span class="cursor"></span></span><span class="esc">esc</span></div>
+            <div class="lz-body">
+              <div class="lz-results">
+                <div class="lz-sect">Files</div>
+                <div class="lz-row active" id="lzRowA"><span class="ico ftype" style="background:#9a5b7a">STL</span><div><div class="nm mono">d20-<span class="hl">dice</span>.stl</div><div class="sub"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span> Polyhedral Dice Set · 0.8 MB</div></div></div>
+                <div class="lz-row"><span class="ico ftype" style="background:#c06b2e">3MF</span><div><div class="nm mono"><span class="hl">dice</span>-tower.3mf</div><div class="sub"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span> Tabletop &amp; Terrain · 6.4 MB</div></div></div>
+                <div class="lz-row"><span class="ico ftype" style="background:#6f8c5a">STL</span><div><div class="nm mono">d6-<span class="hl">dice</span>.stl</div><div class="sub"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span> Polyhedral Dice Set · 0.4 MB</div></div></div>
+                <div class="lz-sect">Folders</div>
+                <div class="lz-row"><span class="ico" style="background:#9a5b7a"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span></span><div><div class="nm">Polyhedral <span class="hl">Dice</span> Set</div><div class="sub">7 files · tabletop, polyhedral</div></div><span class="chev"><span data-icon="chevronRight" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M9 6l6 6-6 6"></path></svg></span></span></div>
+              </div>
+              <div class="lz-preview">
+                <div class="lz-pv-thumb" style="background:radial-gradient(120% 120% at 30% 20%, #9a5b7a33, #9a5b7a11)"><div class="scene" style="--c:#9a5b7a;width:60%;height:78%"><div class="obj-gem" style="position:relative;width:74%"></div></div><span class="lz-pv-badge">STL</span></div>
+                <div class="lz-pv-name">d20-<span class="hl">dice</span>.stl</div>
+                <div class="lz-pv-path"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span> /srv/3d-models/polyhedral-dice-set/d20-dice.stl</div>
+                <div class="lz-pv-meta">
+                  <div><div class="k">Type</div><div class="v">STL mesh</div></div>
+                  <div><div class="k">Size</div><div class="v">0.8 MB</div></div>
+                  <div><div class="k">Folder</div><div class="v">Dice Set</div></div>
+                  <div><div class="k">Parts</div><div class="v">1 of 7</div></div>
+                </div>
+                <div class="lz-actions">
+                  <span class="lz-btn primary"><span data-icon="slice" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7h18"></path><path d="M3 12h18"></path><path d="M3 17h18"></path></svg></span> Open</span>
+                  <span class="lz-btn icon"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span></span>
+                  <span class="lz-btn icon"><span data-icon="link" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M9 15l6-6"></path><path d="M10 7l1-1a4 4 0 0 1 6 6l-1 1"></path><path d="M14 17l-1 1a4 4 0 0 1-6-6l1-1"></path></svg></span></span>
+                </div>
+              </div>
+            </div>
+            <div class="lz-foot"><div class="hints"><span><span class="kbd">↑↓</span> navigate</span><span><span class="kbd">↵</span> open</span><span><span class="kbd">esc</span> dismiss</span></div><div>4 results</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== YOUR FILES STAY PUT ===================== -->
+<section class="section" style="padding-top:0">
+  <div class="wrap">
+    <div class="row flip">
+      <div class="row-copy reveal" style="opacity: 0; transform: translateY(28px);">
+        <span class="eyebrow">Your files, your rules</span>
+        <h2>A window onto your collection — not another silo.</h2>
+        <p>Most tools want to import, re-encode and lock your models inside their database. Trove does the opposite. Your folders stay exactly as they are; Trove just builds a fast, friendly index on top.</p>
+        <ul class="row-list">
+          <li><span class="ck"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span><span><b>Never moved or modified.</b> <span class="muted">Eject a library any time — your files don't even notice.</span></span></li>
+          <li><span class="ck"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span><span><b>Watches for changes.</b> <span class="muted">Drop a new STL in the folder and it appears, auto-tagged.</span></span></li>
+          <li><span class="ck"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span><span><b>Hands off to your tools.</b> <span class="muted">Trove finds &amp; inspects — your slicer and file manager do the rest.</span></span></li>
+        </ul>
+      </div>
+      <div class="row-media reveal d1" style="opacity: 0; transform: translateY(28px);">
+        <!-- Libraries mount-manager mock -->
+        <div class="app-window" style="grid-template-columns:1fr">
+          <div class="aw-main">
+            <div class="aw-top"><div class="aw-content-head" style="margin:0;width:100%"><h3>Libraries</h3><span class="sub">3 mounted</span><div class="spacer"></div><div class="aw-mount"><span data-icon="plus" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg></span> Mount folder</div></div></div>
+            <div class="aw-content" style="display:flex;flex-direction:column;gap:12px">
+              <div class="mount-opt" style="background:var(--surface);border-color:var(--line)"><div class="oic"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span></div><div style="flex:1"><div class="ot">Local · /srv/3d-models</div><div class="od">214 models · 1,402 files</div></div><span class="aw-pill" style="background:var(--accent-soft);border-color:var(--accent);color:var(--accent)"><span data-icon="eye" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"></path></svg></span> watching</span></div>
+              <div class="mount-opt" style="background:var(--surface);border-color:var(--line)"><div class="oic"><span data-icon="server" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M4 5h16v6H4z"></path><path d="M4 13h16v6H4z"></path><path d="M8 8h.01"></path><path d="M8 16h.01"></path></svg></span></div><div style="flex:1"><div class="ot">SMB · //nas.local/prints</div><div class="od">98 models · 640 files</div></div><span class="aw-pill" style="background:var(--accent-soft);border-color:var(--accent);color:var(--accent)"><span data-icon="refresh" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg></span> scanning…</span></div>
+              <div class="mount-opt" style="background:var(--surface);border-color:var(--line)"><div class="oic"><span data-icon="folder" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span></div><div style="flex:1"><div class="ot">Local · ~/Downloads/printables</div><div class="od">31 models · 88 files</div></div><span class="aw-pill"><span data-icon="clock" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z"></path><path d="M12 7v5l3 2"></path></svg></span> idle</span></div>
+              <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink-2);background:var(--accent-soft);border-radius:var(--r-md);padding:13px 15px"><span data-icon="info" style="color: var(--accent); font-size: 19px; display: inline-flex;" data-stamped="1"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z"></path><path d="M12 11v5"></path><path d="M12 8h.01"></path></svg></span> Files are indexed in place. Ejecting a library never deletes anything on disk.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== HOW IT WORKS ===================== -->
+<section class="section" id="how" style="padding-top:0">
+  <div class="wrap">
+    <div class="section-head center reveal" style="opacity: 0; transform: translateY(28px);">
+      <span class="eyebrow center">First run, in under a minute</span>
+      <h2>Mount a folder. Watch it scan. Start browsing.</h2>
+    </div>
+    <div class="steps">
+      <div class="step reveal" style="opacity: 0; transform: translateY(28px);">
+        <div class="step-num">STEP 01<span></span></div>
+        <div class="step-viz">
+          <div class="mount-card">
+            <div class="mount-opt on"><div class="oic"><span data-icon="eye" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"></path></svg></span></div><div><div class="ot">Watch for changes</div><div class="od">Auto-index new files</div></div><span class="tick"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span></div>
+            <div class="mount-opt on"><div class="oic"><span data-icon="cube" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 2 3 7v10l9 5 9-5V7l-9-5Z"></path><path d="M3 7l9 5 9-5"></path><path d="M12 12v10"></path></svg></span></div><div><div class="ot">Render thumbnails</div><div class="od">3D previews for each model</div></div><span class="tick"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span></div>
+          </div>
+        </div>
+        <h3>Point it at your models</h3>
+        <p>Choose a local folder or a network drive. Trove never asks you to upload — it reads what's already there.</p>
+      </div>
+      <div class="step reveal d1" style="opacity: 0; transform: translateY(28px);">
+        <div class="step-num">STEP 02<span></span></div>
+        <div class="step-viz">
+          <div class="scanlist">
+            <div class="scanline"><span class="ck"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span> d20-dice.stl <span class="meta">rendered</span></div>
+            <div class="scanline"><span class="ck"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span> hex-planter.3mf <span class="meta">rendered</span></div>
+            <div class="scanline"><span class="ck"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></span> desk-tray.stl <span class="meta">rendered</span></div>
+            <div class="scanline" style="opacity:.55"><span class="ck" style="background:var(--ink-3)"><span data-icon="refresh" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M3 21v-5h5"></path></svg></span></span> gearbox-planetary.step</div>
+          </div>
+        </div>
+        <h3>It indexes, in place</h3>
+        <p>A quick scan builds thumbnails, derives dimensions and auto-tags — then keeps watching for anything new.</p>
+      </div>
+      <div class="step reveal d2" style="opacity: 0; transform: translateY(28px);">
+        <div class="step-num">STEP 03<span></span></div>
+        <div class="step-viz" style="gap:18px;flex-direction:column">
+          <div class="ring"><svg width="90" height="90"><circle class="track" cx="45" cy="45" r="36"></circle><circle class="bar" cx="45" cy="45" r="36" style="stroke-dashoffset:0"></circle></svg><div class="pct" style="color:var(--accent);font-size:28px"><span data-icon="check" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M5 12l5 5 9-11"></path></svg></span></div></div>
+          <div style="font-family:var(--font-mono);font-size:12px;color:var(--ink-2)">214 models · 1,402 files · 96 tags</div>
+        </div>
+        <h3>Browse your trove</h3>
+        <p>Open the Library and everything's there — grouped, tagged, searchable, and ready to inspect or hand off.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== OPEN SOURCE ===================== -->
+<section class="section" id="opensource" style="padding-top:0">
+  <div class="wrap">
+    <div class="section-head center reveal" style="opacity: 0; transform: translateY(28px);">
+      <span class="eyebrow center">Open by design</span>
+      <h2>Free, open source, and yours to keep.</h2>
+      <p>Trove is an original reimagining of the open-source <strong>Manyfold</strong> project — rebuilt around a real 3D viewer, smarter organization, and search that keeps up. A native app for macOS, Windows, and Linux that installs in seconds and works fully offline. No account. No telemetry you didn't ask for.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== GET STARTED ===================== -->
+<section class="section closing" id="get-started" style="padding-top:0">
+  <div class="wrap">
+    <div class="closing-card reveal" style="opacity: 0; transform: translateY(28px);">
+      <span class="eyebrow center">Get started</span>
+      <h2>Download Trove and open your library.</h2>
+      <p>Install in seconds, point it at your models folder, and you're browsing. No setup, no account — and it works fully offline.</p>
+      <div class="dl-row" id="dlRow"><a class="btn btn-primary" data-os="mac" href="https://github.com/kurenn/trove/releases/latest" target="_blank" rel="noopener"><span data-icon="download" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 3v12"></path><path d="M7 11l5 5 5-5"></path><path d="M5 21h14"></path></svg></span> Download for macOS</a>
+        
+        <a class="btn" data-os="win" href="https://github.com/kurenn/trove/releases/latest" target="_blank" rel="noopener"><span data-icon="download" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 3v12"></path><path d="M7 11l5 5 5-5"></path><path d="M5 21h14"></path></svg></span> Windows</a>
+        <a class="btn" data-os="linux" href="https://github.com/kurenn/trove/releases/latest" target="_blank" rel="noopener"><span data-icon="download" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 3v12"></path><path d="M7 11l5 5 5-5"></path><path d="M5 21h14"></path></svg></span> Linux</a>
+      </div>
+      <div class="dl-note">Free · macOS 12+ · Windows 10+ · Linux (AppImage &amp; .deb) · 18&nbsp;MB</div>
+      <div class="closing-actions">
+        <a class="btn btn-ghost" href="https://github.com/kurenn/trove" target="_blank" rel="noopener"><span data-icon="star" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 3l2.6 6.3L21 9.8l-5 4.3 1.6 6.6L12 17l-5.6 3.7L8 14.1l-5-4.3 6.4-.5L12 3Z"></path></svg></span> Star on GitHub</a>
+        <a class="btn btn-ghost" href="https://github.com/kurenn/trove#install" target="_blank" rel="noopener"><span data-icon="info" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z"></path><path d="M12 11v5"></path><path d="M12 8h.01"></path></svg></span> Install guide</a>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ===================== FOOTER ===================== -->
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-brand">
+      <a class="logo" href="#top">
+        <span class="mark" data-mark="" data-stamped="1"><svg width="100%" height="100%" viewBox="0 0 32 32" fill="none" aria-hidden="true" style="display:block"><rect x="1" y="1" width="30" height="30" rx="9" fill="var(--accent)"></rect><g stroke="var(--accent-ink)" stroke-width="2" fill="none" stroke-linejoin="round" stroke-linecap="round"><path d="M16 6 L25 13.5 L16 26 L7 13.5 Z"></path><path d="M7 13.5 H25"></path><path d="M16 6 L12.5 13.5 L16 26"></path><path d="M16 6 L19.5 13.5 L16 26"></path></g></svg></span>
+        <span class="ltext"><b>trove</b><span>by spoolr.io</span></span>
+      </a>
+      <p>A calm, local home for your 3D-print collection. A desktop app — your files stay put.</p>
+    </div>
+    <div class="fcol"><h4>Product</h4><ul><li><a href="#features">Features</a></li><li><a href="#quickfind">Quick Find</a></li><li><a href="#how">How it works</a></li><li><a href="#get-started">Get started</a></li></ul></div>
+    <div class="fcol"><h4>Open source</h4><ul><li><a href="https://github.com/kurenn/trove" target="_blank" rel="noopener">GitHub</a></li><li><a href="https://manyfold.app" target="_blank" rel="noopener">Manyfold project</a></li><li><a href="https://github.com/kurenn/trove/releases" target="_blank" rel="noopener">Changelog</a></li><li><a href="https://github.com/kurenn/trove/blob/main/LICENSE" target="_blank" rel="noopener">License (MIT)</a></li></ul></div>
+    <div class="fcol"><h4>Resources</h4><ul><li><a href="https://github.com/kurenn/trove#readme" target="_blank" rel="noopener">Docs</a></li><li><a href="https://github.com/kurenn/trove#install" target="_blank" rel="noopener">Install guide</a></li><li><a href="https://github.com/kurenn/trove/discussions" target="_blank" rel="noopener">Community</a></li><li><a href="https://github.com/kurenn/trove/releases" target="_blank" rel="noopener">Release notes</a></li></ul></div>
+  </div>
+  <div class="wrap">
+    <div class="footer-bottom">
+      <span>© 2026 spoolr.io — Trove is free &amp; open source.</span>
+      <span class="fmono">indexed in place · never uploaded</span>
+    </div>
+  </div>
+</footer>
+
+<script src="landing.js"></script>
+
+<!-- ===================== TWEAKS ===================== -->
+<div class="tweaks" id="tweaks" aria-label="Tweaks">
+  <div class="tweaks-head">
+    <b>Tweaks</b>
+    <button class="x" id="tweaksClose" type="button" aria-label="Close"><span data-icon="x" data-stamped="1" style="display: inline-flex;"><svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:block"><path d="M6 6l12 12"></path><path d="M18 6 6 18"></path></svg></span></button>
+  </div>
+  <div class="tweaks-body">
+    <div class="tw-group">
+      <div class="tw-label">Accent</div>
+      <div class="tw-swatches" id="twAccent">
+        <span class="tw-sw sel" data-val="#c2693d" style="background:#c2693d" title="Terracotta"></span>
+        <span class="tw-sw" data-val="#c06b2e" style="background:#c06b2e" title="Pumpkin"></span>
+        <span class="tw-sw" data-val="#b5604f" style="background:#b5604f" title="Clay"></span>
+        <span class="tw-sw" data-val="#6f8c5a" style="background:#6f8c5a" title="Sage"></span>
+        <span class="tw-sw" data-val="#9a5b7a" style="background:#9a5b7a" title="Plum"></span>
+      </div>
+    </div>
+    <div class="tw-group">
+      <div class="tw-label">Theme</div>
+      <div class="tw-seg" id="twTheme">
+        <button data-val="light" type="button">Light</button>
+        <button data-val="dark" type="button" class="sel">Dark</button>
+      </div>
+    </div>
+    <div class="tw-group">
+      <div class="tw-label">Launcher wallpaper</div>
+      <div class="tw-seg" id="twWall">
+        <button data-val="dusk" type="button" class="sel">Dusk</button>
+        <button data-val="night" type="button">Night</button>
+        <button data-val="sand" type="button">Sand</button>
+      </div>
+    </div>
+    <div class="tw-group">
+      <div class="tw-label">Hero headline</div>
+      <div class="tw-seg" id="twHeadline">
+        <button data-val="organized" type="button" class="sel">Organized</button>
+        <button data-val="findable" type="button">Findable</button>
+        <button data-val="yours" type="button">Yours</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="tweaks.js"></script>
+
+
+</body></html>
