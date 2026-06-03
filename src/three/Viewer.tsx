@@ -58,9 +58,9 @@ export { ThumbFactory };
 interface ThumbProps {
   geometry: GeometryKey;
   color: string;
-  /** A folder render/photo image — best preview, used first when present. */
-  preview?: string;
-  /** A directly-supplied cached thumbnail (e.g. the launcher passes one). */
+  /** A LOCAL cached thumbnail path (downscaled folder image or rendered mesh).
+      Never a remote/network original — those are downscaled into the cache by the
+      scanner so browsing stays local and instant. */
   thumb?: string;
   /** Subscribe to this model's generated thumbnail in the store (per-card update). */
   modelId?: string;
@@ -72,9 +72,12 @@ interface ThumbProps {
   style?: React.CSSProperties;
 }
 
-export function Thumb({ geometry, color, preview, thumb, modelId, real, className, style }: ThumbProps) {
+export function Thumb({ geometry, color, thumb, modelId, real, className, style }: ThumbProps) {
   const live = useApp((s) => (modelId ? s.thumbs[modelId] : undefined));
-  const ready = preview ?? thumb ?? live;     // image we can show right now
+  // Cache-only: thumb/live are LOCAL (downscaled folder image or rendered mesh).
+  // The remote full-res original is never shown here — that's what made browsing a
+  // network share unusable (every visible card streaming MBs off the NAS).
+  const ready = thumb ?? live;
   const procedural = !ready && !real;          // mock data → meaningful procedural shape
   const [proc, setProc] = useState<string | null>(null);
   useEffect(() => {

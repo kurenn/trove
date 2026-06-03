@@ -28,6 +28,7 @@ jwalk = "0.8"
 crossbeam-channel = "0.5"
 base64 = "0.22"
 notify = "6"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
 [profile.release]
 panic = "abort"

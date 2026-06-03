@@ -830,6 +830,85 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
     eprintln!("[scan] {lib_id}: {total} models ({changed} new/changed, {removed} removed)");
     emit_progress(app, lib_id, total, counters.get().1, true, false);
     let _ = app.emit("dataset-changed", ());
+
+    // Build the LOCAL downscaled-image cache last — the library is already
+    // browsable, and folder-image thumbnails now fill in without the grid ever
+    // streaming full-resolution originals off a (slow) network share.
+    let thumbs_on = db.0.lock().ok()
+        .and_then(|c| c.query_row("SELECT thumbs FROM libraries WHERE id=?1", params![lib_id], |r| r.get::<_, i64>(0)).ok())
+        .unwrap_or(1) != 0;
+    if thumbs_on {
+        generate_image_thumbs(app, lib_id, &cancel);
+    }
+}
+
+/// Downscale each model's folder image (its `preview`) into the local thumbnail
+/// cache so browsing never streams full-resolution images off a network share.
+/// Only touches new/changed models (those with a `preview` but no cached `thumb`);
+/// reads each source once, resizes to ≤512px, writes JPEG, points `thumb` at it.
+/// Runs in the scan's background thread — gentle, cancellable, and incremental.
+fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<AtomicBool>) {
+    use tauri::Manager;
+    let db = app.state::<Db>();
+    let dir = match app.path().app_cache_dir() {
+        Ok(d) => d.join("thumbs"),
+        Err(_) => return,
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let todo: Vec<(String, String)> = match db.0.lock() {
+        Ok(conn) => conn
+            .prepare(
+                "SELECT id, preview FROM models
+                 WHERE library_id=?1 AND preview IS NOT NULL AND (thumb IS NULL OR thumb='')",
+            )
+            .and_then(|mut st| {
+                st.query_map(params![lib_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                    .map(|rows| rows.flatten().collect())
+            })
+            .unwrap_or_default(),
+        Err(_) => return,
+    };
+    if todo.is_empty() {
+        return;
+    }
+
+    let mut done = 0u32;
+    for (id, src) in todo {
+        if cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        let out = dir.join(format!("{id}.jpg"));
+        if downscale_image(Path::new(&src), &out, 512).is_ok() {
+            if let Ok(conn) = db.0.lock() {
+                let _ = conn.execute(
+                    "UPDATE models SET thumb=?2 WHERE id=?1",
+                    params![id, out.to_string_lossy().to_string()],
+                );
+            }
+            done += 1;
+            // Let the grid swap placeholders for real previews as they land.
+            if done % 24 == 0 {
+                let _ = app.emit("dataset-changed", ());
+            }
+        }
+    }
+    if done > 0 {
+        let _ = app.emit("dataset-changed", ());
+    }
+    eprintln!("[scan] {lib_id}: cached {done} folder-image thumbnails");
+}
+
+/// Decode an image, shrink so the longest side ≤ `max`, and write a JPEG.
+fn downscale_image(src: &Path, out: &Path, max: u32) -> Result<(), String> {
+    let img = image::open(src).map_err(|e| e.to_string())?;
+    let scaled = if img.width().max(img.height()) > max {
+        img.thumbnail(max, max) // fast box-filter shrink — fine for previews
+    } else {
+        img
+    };
+    scaled.to_rgb8().save(out).map_err(|e| e.to_string()) // .jpg ext → JPEG
 }
 
 /// Clone helper so chunks can own their files for compute_record.

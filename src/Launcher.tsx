@@ -191,7 +191,7 @@ export function Launcher() {
               cur.k === "file" ? (
                 <>
                   <div className="lz-pv-thumb" style={{ background: `radial-gradient(120% 100% at 50% 18%, ${cur.item.color}33, ${cur.item.color}11)` }}>
-                    <Thumb geometry={cur.item.geometry as GeometryKey} color={cur.item.color} preview={thumbUrl(cur.item.preview)} thumb={thumbUrl(cur.item.thumb)} real={isTauri} />
+                    <Thumb geometry={cur.item.geometry as GeometryKey} color={cur.item.color} thumb={thumbUrl(cur.item.thumb)} real={isTauri} />
                     <span className="lz-pv-badge">{cur.item.type}</span>
                   </div>
                   <div className="lz-pv-name"><HL text={cur.item.name} q={q} /></div>
@@ -211,7 +211,7 @@ export function Launcher() {
               ) : (
                 <>
                   <div className="lz-pv-thumb" style={{ background: `radial-gradient(120% 100% at 50% 18%, ${cur.item.color}33, ${cur.item.color}11)` }}>
-                    <Thumb geometry={cur.item.geometry as GeometryKey} color={cur.item.color} preview={thumbUrl(cur.item.preview)} thumb={thumbUrl(cur.item.thumb)} real={isTauri} />
+                    <Thumb geometry={cur.item.geometry as GeometryKey} color={cur.item.color} thumb={thumbUrl(cur.item.thumb)} real={isTauri} />
                     <span className="lz-pv-badge">{cur.item.files} files</span>
                   </div>
                   <div className="lz-pv-name" style={{ fontFamily: "var(--font-display)" }}><HL text={cur.item.name} q={q} /></div>

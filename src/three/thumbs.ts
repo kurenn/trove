@@ -79,7 +79,7 @@ function setThumb(id: string, url: string) {
   useApp.getState().setThumb(id, url);
 }
 
-const MAX_INFLIGHT = 3;
+const MAX_INFLIGHT = 2; // gentle on network shares — meshes can be MBs each
 const queued = new Set<string>();
 const attempted = new Set<string>();
 const pending: Model[] = [];
@@ -135,12 +135,21 @@ function pump() {
    no worker-parseable STL/OBJ part. */
 export function requestThumb(m: Model): void {
   if (!isTauri) return;
-  if (m.preview) return;                    // folder image is the preview
-  if (useApp.getState().thumbs[m.id]) return;
+  if (m.preview) return;                    // folder image → downscaled by the scanner
+  if (m.thumb || useApp.getState().thumbs[m.id]) return;
   if (attempted.has(m.id) || queued.has(m.id)) return;
   if (!workablePart(m)) return;
   attempted.add(m.id);
   queued.add(m.id);
   pending.push(m);
   pump();
+}
+
+/** Background pass: render thumbnails for every model that still needs one
+   (image-less, with a worker-parseable part), throttled by the queue above so a
+   network share is never hammered. Idempotent — already-done/attempted models are
+   skipped — so it's safe to call on every dataset refresh. */
+export function sweepThumbs(models: Model[]): void {
+  if (!isTauri) return;
+  for (const m of models) requestThumb(m);
 }

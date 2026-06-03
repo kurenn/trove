@@ -1,10 +1,8 @@
 /* cards.tsx — ModelCard, ListRow, MiniCard, ModelResults. */
 
-import { useEffect } from "react";
 import { Icon, Avatar } from "./Icons";
 import { Thumb } from "../three/Viewer";
 import { VirtualGrid } from "./VirtualGrid";
-import { requestThumb } from "../three/thumbs";
 import { creatorById, fmtSize } from "../data/dataset";
 import type { Creator, Model } from "../data/types";
 
@@ -41,14 +39,13 @@ interface CardProps {
 
 export function ModelCard({ m, onOpen, fav, onFav }: CardProps) {
   const creator = creatorById(m.creator) ?? UNKNOWN_CREATOR;
-  // Request a real thumbnail when the card mounts (virtualized → only visible
-  // cards). requestThumb no-ops if the model has a folder image, already has a
-  // thumbnail, or has no worker-parseable (STL/OBJ) part — so this is cheap.
-  useEffect(() => { requestThumb(m); }, [m.id]);
+  // No per-card thumbnail fetch here — a single throttled background pass
+  // (sweepThumbs, kicked from the store) renders missing thumbnails so scrolling
+  // never streams meshes/images off a network share. Cards just show the cache.
   return (
     <div className="model-card" onClick={() => onOpen(m)}>
       <div className="thumb-wrap">
-        <Thumb geometry={m.geometry} color={m.color} preview={m.preview} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
+        <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
         <button className={"card-fav" + (fav ? " is-fav" : "")} onClick={(e) => { e.stopPropagation(); onFav(m.id); }}>
           <Icon name="heart" size={16} fill={fav ? "currentColor" : "none"} />
         </button>
@@ -76,10 +73,9 @@ export function ModelCard({ m, onOpen, fav, onFav }: CardProps) {
 
 export function ListRow({ m, onOpen, fav, onFav }: CardProps) {
   const creator = creatorById(m.creator) ?? UNKNOWN_CREATOR;
-  useEffect(() => { requestThumb(m); }, [m.id]);
   return (
     <div className="list-row" onClick={() => onOpen(m)}>
-      <Thumb geometry={m.geometry} color={m.color} preview={m.preview} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
+      <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
       <div className="list-main">
         <div className="list-name">{m.name}</div>
         <div className="list-sub">{creator.name} · {m.tags.slice(0, 3).join(", ")}</div>
@@ -101,7 +97,7 @@ export function ListRow({ m, onOpen, fav, onFav }: CardProps) {
 export function MiniCard({ m, onOpen }: { m: Model; onOpen: (m: Model) => void }) {
   return (
     <div className="model-card" style={{ minWidth: 160 }} onClick={() => onOpen(m)}>
-      <Thumb geometry={m.geometry} color={m.color} preview={m.preview} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
+      <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
       <div className="card-body" style={{ padding: 11, gap: 4 }}>
         <div className="card-title" style={{ fontSize: 13.5 }}>{m.name}</div>
         <div className="faint" style={{ fontSize: 11.5 }}>{m.printTime} · {m.filament}g</div>

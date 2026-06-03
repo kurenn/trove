@@ -184,9 +184,11 @@ export const useApp = create<AppState>((set, get) => ({
       const [raw, libraries] = await Promise.all([api.getDataset(), api.listLibraries()]);
       const { data, seeded } = await resolveAssets(raw, get().thumbs);
       set({ data, libraries, thumbs: seeded, fav: get().fav.filter((id) => data.MODELS.some((m) => m.id === id)) });
-      // No automatic mesh loading here: the grid shows cached thumbnails or a
-      // neutral placeholder. Real thumbnails are generated only when a model is
-      // opened (Detail), so the catalog stays instant on huge/remote libraries.
+      // Kick a gentle, throttled background pass to render thumbnails for any
+      // image-less models that still need one (off the main thread, ≤2 at a time).
+      // Folder-image models are handled by the Rust scanner's downscale cache, so
+      // browsing only ever reads LOCAL assets — never streams off a network share.
+      import("../three/thumbs").then(({ sweepThumbs }) => sweepThumbs(data.MODELS)).catch(() => {});
     } catch (e) {
       console.error("refresh failed", e);
     } finally {

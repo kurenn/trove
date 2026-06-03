@@ -23,7 +23,7 @@ function CollCover({ collection }: { collection: Collection }) {
   return (
     <div className="coll-cover">
       {ms.slice(0, 4).map((m) => (
-        <Thumb key={m.id} geometry={m.geometry} color={m.color} preview={m.preview} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
+        <Thumb key={m.id} geometry={m.geometry} color={m.color} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
       ))}
     </div>
   );
