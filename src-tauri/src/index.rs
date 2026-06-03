@@ -59,96 +59,38 @@ fn is_image(ext: &str) -> bool {
 }
 
 const PREVIEW_NAMES: [&str; 6] = ["render", "preview", "cover", "main", "thumb", "hero"];
-const IMG_DIR_HINTS: [&str; 6] = ["render", "image", "photo", "preview", "pic", "thumb"];
-/// Folders that hold the printable parts of a model rather than the model root —
-/// when the model dir IS one of these, the hero render usually lives one level up.
-const PARTS_DIR_NAMES: [&str; 11] =
-    ["stl", "stls", "files", "parts", "print", "prints", "mesh", "meshes", "3mf", "3mfs", "lys"];
+const IMG_DIR_HINTS: [&str; 4] = ["render", "image", "photo", "pic"];
 
 fn name_score(stem: &str) -> Option<usize> {
     let n = stem.to_lowercase();
     PREVIEW_NAMES.iter().position(|k| n.contains(k))
 }
 
-/// Choose a folder image to use as the model preview. Looks, in order:
-///   1. an image directly in the model dir,
-///   2. an image in an immediate subdirectory (e.g. `Renders/`, `Images/`),
-///   3. for parts-bucket dirs (`STLs/`, `Files/`…), an image in the parent tree.
-/// Within each step it prefers descriptive names (render/preview/cover/…) and
-/// images sitting in render/photo-named folders, else the largest image (usually
-/// the hero render). Returns the chosen file's path, if any image is found.
-fn pick_preview(dir: &Path, files: &[ScannedFile]) -> Option<String> {
-    // 1. Direct image in the model dir (no extra I/O — uses the already-read list).
-    let direct: Vec<&ScannedFile> = files.iter().filter(|f| is_image(&f.ext)).collect();
-    if !direct.is_empty() {
-        let named = direct
-            .iter()
-            .filter(|f| name_score(&f.name).is_some())
-            .min_by_key(|f| name_score(&f.name).unwrap());
-        let chosen = named.copied().or_else(|| direct.iter().copied().max_by_key(|f| f.size));
-        return chosen.map(|f| f.path.clone());
-    }
-    // 2. Image in a nearby subdirectory (Renders/, Images/, Photos/, …).
-    if let Some(p) = scan_dir_images(dir, 2) {
-        return Some(p);
-    }
-    // 3. The model dir is a parts bucket → the render usually sits beside it.
-    let bucket = dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .map(|s| PARTS_DIR_NAMES.contains(&s.to_lowercase().as_str()))
-        .unwrap_or(false);
-    if bucket {
-        if let Some(parent) = dir.parent() {
-            return scan_dir_images(parent, 2);
-        }
-    }
-    None
-}
-
-/// Bounded shallow walk for images under `dir` (depth ≤ `max_depth`). Prefers
-/// descriptive filenames, then images inside render/photo-named folders, then the
-/// largest. Capped so a stray asset-heavy folder can't stall a network scan.
-fn scan_dir_images(dir: &Path, max_depth: usize) -> Option<String> {
-    // (name_rank, in_img_dir, size, path) — lower name_rank = better name match.
-    let mut imgs: Vec<(usize, bool, u64, String)> = Vec::new();
-    for entry in WalkDir::new(dir)
-        .max_depth(max_depth)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let name = match entry.file_name().to_str() {
-            Some(n) => n,
-            None => continue,
-        };
-        if name.starts_with('.') || !is_image(&ext_of(name)) {
-            continue;
-        }
-        let parent_name = entry
-            .path()
+/// Choose a model's preview image from its gathered files (the model groups its
+/// whole subtree, so `files` already contains every image under it). Prefers a
+/// descriptive filename (render/preview/cover/…), then an image sitting in a
+/// render/photo-named folder, then the largest image (usually the hero render).
+fn pick_preview(files: &[ScannedFile]) -> Option<String> {
+    let in_img_dir = |path: &str| {
+        Path::new(path)
             .parent()
             .and_then(|p| p.file_name())
             .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        let in_img_dir = IMG_DIR_HINTS.iter().any(|k| parent_name.contains(k));
-        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-        let rank = name_score(&stem_of(name)).unwrap_or(usize::MAX);
-        imgs.push((rank, in_img_dir, size, entry.path().to_string_lossy().to_string()));
-        if imgs.len() >= 400 {
-            break;
-        }
-    }
-    // Best name match wins; then images in render/photo folders; then largest.
-    imgs.into_iter()
+            .map(|n| { let n = n.to_lowercase(); IMG_DIR_HINTS.iter().any(|k| n.contains(k)) })
+            .unwrap_or(false)
+    };
+    files
+        .iter()
+        .filter(|f| is_image(&f.ext))
+        // sort key: best name rank, then in-image-folder, then largest.
         .min_by(|a, b| {
-            a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(b.2.cmp(&a.2))
+            let ra = name_score(&stem_of(&a.name)).unwrap_or(usize::MAX);
+            let rb = name_score(&stem_of(&b.name)).unwrap_or(usize::MAX);
+            ra.cmp(&rb)
+                .then(in_img_dir(&b.path).cmp(&in_img_dir(&a.path)))
+                .then(b.size.cmp(&a.size))
         })
-        .map(|(_, _, _, p)| p)
+        .map(|f| f.path.clone())
 }
 const GEOMS: [&str; 9] = ["vase", "gear", "d20", "cube", "torusknot", "bracket", "figurine", "flexi", "box"];
 const PALETTE: [&str; 9] = [
@@ -322,6 +264,7 @@ fn mtime_secs(p: &Path) -> i64 {
 }
 
 // ── scanning ─────────────────────────────────────────────────────────────────
+#[derive(Debug)]
 struct ScannedFile {
     name: String,
     ext: String,
@@ -432,7 +375,7 @@ fn compute_record(root: &Path, dir: &Path, mtime: i64, files: Vec<ScannedFile>) 
     );
     let printable_exts: Vec<String> = printable.iter().map(|f| f.ext.clone()).collect();
     let (tags, supports) = auto_tags(&hay, &printable_exts, printable.len() > 1);
-    let preview = pick_preview(dir, &files);
+    let preview = pick_preview(&files);
 
     ModelRecord {
         id: model_id,
@@ -569,6 +512,8 @@ fn scan_stream(
 const WALK_THREADS: usize = 16;
 
 /// A message from a walker thread to the DB writer.
+/// (Retained for the `bench_walk` benchmark; the live scan uses `collect_tree`.)
+#[allow(dead_code)]
 enum ScanMsg {
     /// A new or changed model directory — write/replace it.
     Model(Box<ModelRecord>),
@@ -581,6 +526,7 @@ enum ScanMsg {
 /// running serially. INCREMENTAL: if a model directory's mtime matches the
 /// `existing` fingerprint, it's reported `Unchanged` (skipping per-file stats and
 /// any DB/thumbnail work); otherwise its files are read and a `Model` is emitted.
+#[allow(dead_code)]
 fn scan_parallel(
     root: &Path,
     cancel: Arc<AtomicBool>,
@@ -701,12 +647,137 @@ fn write_chunked(
     (models, files)
 }
 
-/// Background-safe INCREMENTAL parallel scan. Walks with NO DB lock held; each
-/// directory is processed on a worker thread. Directories whose mtime matches the
-/// stored fingerprint are kept as-is (no file stats, no DB write, no thumbnail
-/// re-render); only new/changed directories are re-read and upserted, and models
-/// whose directories disappeared are removed. Progressive, cancellable, and
-/// surfaces read errors (permission) as an 'error' status.
+/// One model after grouping: its root directory, every file in its subtree (parts
+/// + extras + images), and a change fingerprint (max mtime across the subtree).
+struct GroupedModel {
+    dir: PathBuf,
+    files: Vec<ScannedFile>,
+    fingerprint: i64,
+}
+
+/// PARALLEL tree collector: walk `root`, emitting (dir, loose-files, dir-mtime) for
+/// every directory that holds at least one file. Used by the two-phase grouping
+/// scan (collect the whole tree → group into models), so a model whose printables
+/// live in nested subfolders is recognized as ONE model rather than fragmenting.
+fn collect_tree(
+    root: &Path,
+    cancel: Arc<AtomicBool>,
+    threads: usize,
+    on_dir: Arc<dyn Fn(PathBuf, Vec<ScannedFile>, i64) + Send + Sync>,
+) {
+    let cancel_cl = cancel.clone();
+    let walk = jwalk::WalkDir::new(root)
+        .skip_hidden(true)
+        .parallelism(jwalk::Parallelism::RayonNewPool(threads.max(1)))
+        .process_read_dir(move |_depth, dir_path, _state, children| {
+            if cancel_cl.load(Ordering::SeqCst) {
+                children.clear();
+                return;
+            }
+            let mut files: Vec<ScannedFile> = Vec::new();
+            for dirent in children.iter().flatten() {
+                let name = dirent.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') {
+                    continue;
+                }
+                let md = match dirent.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                if !md.is_file() {
+                    continue;
+                }
+                files.push(ScannedFile {
+                    name: name.clone(),
+                    ext: ext_of(&name),
+                    size: md.len(),
+                    path: dirent.path().to_string_lossy().to_string(),
+                });
+            }
+            if !files.is_empty() {
+                on_dir(dir_path.to_path_buf(), files, mtime_secs(dir_path));
+            }
+        });
+    for _ in walk {
+        if cancel.load(Ordering::SeqCst) {
+            break;
+        }
+    }
+}
+
+/// Group collected directories into models. A directory is a **model root** when it
+/// directly holds loose media (a printable OR an image); a directory of only
+/// subfolders is a container (creator/tier/category) whose children are models in
+/// their own right. Every directory's files are attributed to its nearest
+/// ancestor-or-self model root, so a model absorbs its whole subtree (nested STL
+/// folders → parts, any image → preview). Models with no printable are dropped.
+fn group_models(root: &Path, dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>) -> Vec<GroupedModel> {
+    // A "candidate" directly holds loose media (a printable OR an image).
+    let candidates: HashSet<PathBuf> = dirs
+        .iter()
+        .filter(|(_, (files, _))| files.iter().any(|f| is_printable(&f.ext) || is_image(&f.ext)))
+        .map(|(p, _)| p.clone())
+        .collect();
+    // A model root is the SHALLOWEST candidate in its chain — a candidate with no
+    // candidate ancestor. So a model with loose images + nested STL subfolders is
+    // one model (the top), while a container (no loose media) lets each child be a
+    // model in its own right.
+    let roots: HashSet<PathBuf> = candidates
+        .iter()
+        .filter(|p| {
+            let mut cur = p.parent();
+            while let Some(c) = cur {
+                if candidates.contains(c) {
+                    return false; // a shallower candidate absorbs this one
+                }
+                if c == root {
+                    break;
+                }
+                cur = c.parent();
+            }
+            true
+        })
+        .cloned()
+        .collect();
+
+    // Nearest ancestor-or-self model root for a directory (bounded by the library root).
+    let nearest_root = |d: &Path| -> Option<PathBuf> {
+        let mut cur: Option<&Path> = Some(d);
+        while let Some(c) = cur {
+            if roots.contains(c) {
+                return Some(c.to_path_buf());
+            }
+            if c == root {
+                break;
+            }
+            cur = c.parent();
+        }
+        None
+    };
+
+    let mut acc: BTreeMap<PathBuf, (Vec<ScannedFile>, i64)> = BTreeMap::new();
+    for (dirp, (files, mt)) in dirs {
+        if let Some(mr) = nearest_root(dirp) {
+            let e = acc.entry(mr).or_insert_with(|| (Vec::new(), 0));
+            e.0.extend(files.iter().map(|f| f.clone()));
+            if *mt > e.1 {
+                e.1 = *mt;
+            }
+        }
+    }
+
+    acc.into_iter()
+        .filter(|(_, (files, _))| files.iter().any(|f| is_printable(&f.ext)))
+        .map(|(dir, (files, fingerprint))| GroupedModel { dir, files, fingerprint })
+        .collect()
+}
+
+/// Background-safe INCREMENTAL scan. Two-phase: walk the whole tree with NO DB lock
+/// held (parallel worker threads), then group directories into models (a model
+/// absorbs nested part/asset subfolders). Models whose subtree fingerprint matches
+/// the stored value are kept as-is (no DB write, no thumbnail re-render); only
+/// new/changed models are upserted, and models whose folders disappeared are
+/// removed. Cancellable; surfaces read errors (permission) as an 'error' status.
 pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<AtomicBool>, force: bool) {
     let db = app.state::<Db>();
 
@@ -743,58 +814,63 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
     }
     let existing = Arc::new(existing_map);
 
-    // Parallel walk on worker threads → ScanMsg over a channel → single DB writer.
-    let (tx, rx) = crossbeam_channel::unbounded::<ScanMsg>();
+    // ── Phase 1: collect the whole tree (parallel walk, no DB lock) ──
+    let (tx, rx) = crossbeam_channel::unbounded::<(PathBuf, Vec<ScannedFile>, i64)>();
     let root_buf = root.to_path_buf();
     let cancel_walk = cancel.clone();
-    let existing_walk = existing.clone();
-    let on_msg: Arc<dyn Fn(ScanMsg) + Send + Sync> = Arc::new(move |m| { let _ = tx.send(m); });
+    let on_dir: Arc<dyn Fn(PathBuf, Vec<ScannedFile>, i64) + Send + Sync> =
+        Arc::new(move |p, f, m| { let _ = tx.send((p, f, m)); });
     let walker = std::thread::spawn(move || {
-        scan_parallel(&root_buf, cancel_walk, WALK_THREADS, existing_walk, on_msg);
+        collect_tree(&root_buf, cancel_walk, WALK_THREADS, on_dir);
     });
 
+    let mut dirs: BTreeMap<PathBuf, (Vec<ScannedFile>, i64)> = BTreeMap::new();
+    let mut file_total = 0u32;
+    while let Ok((p, files, mt)) = rx.recv() {
+        if cancel.load(Ordering::SeqCst) {
+            break;
+        }
+        file_total += files.len() as u32;
+        dirs.insert(p, (files, mt));
+        if dirs.len() % 64 == 0 {
+            emit_progress(app, lib_id, 0, file_total, false, false);
+        }
+    }
+    let _ = walker.join();
+
+    if cancel.load(Ordering::SeqCst) {
+        emit_progress(app, lib_id, 0, file_total, true, true);
+        let _ = app.emit("dataset-changed", ());
+        return;
+    }
+
+    // ── Phase 2: group directories into models (a model absorbs its subtree) ──
+    let models = group_models(root, &dirs);
+
+    // ── Phase 3: incremental upsert (skip models whose subtree is unchanged) ──
     let mut seen: HashSet<String> = HashSet::new();
     let counters = Cell::new((0u32, 0u32)); // (changed written, changed files)
     let mut batch: Vec<ModelRecord> = Vec::new();
     let mut changed = 0u32;
     let mut last_reload = 0u32;
-    let mut processed = 0u32;
-
-    while let Ok(msg) = rx.recv() {
-        if cancel.load(Ordering::SeqCst) {
-            break;
+    for gm in models {
+        let id = format!("m{:x}", fnv1a(&gm.dir.to_string_lossy()));
+        seen.insert(id.clone());
+        if !force && existing.get(&id) == Some(&gm.fingerprint) {
+            continue; // unchanged → keep existing row + thumbnail
         }
-        match msg {
-            ScanMsg::Unchanged(id) => { seen.insert(id); }
-            ScanMsg::Model(rec) => {
-                seen.insert(rec.id.clone());
-                changed += 1;
-                batch.push(*rec);
-                if batch.len() >= SCAN_BATCH {
-                    flush_batch(&db.0, lib_id, &mut batch, &counters);
-                }
-            }
-        }
-        processed += 1;
-        if processed % 50 == 0 {
-            emit_progress(app, lib_id, seen.len() as u32, changed, false, false);
-            // Reload the grid as new/changed models land (skipped when a rescan is
-            // all-unchanged, since the grid already shows everything).
-            if changed > 0 && (last_reload == 0 || changed - last_reload >= 150) {
+        changed += 1;
+        batch.push(compute_record(root, &gm.dir, gm.fingerprint, gm.files));
+        if batch.len() >= SCAN_BATCH {
+            flush_batch(&db.0, lib_id, &mut batch, &counters);
+            if changed - last_reload >= 80 {
                 last_reload = changed;
+                emit_progress(app, lib_id, seen.len() as u32, changed, false, false);
                 let _ = app.emit("dataset-changed", ());
             }
         }
     }
     flush_batch(&db.0, lib_id, &mut batch, &counters);
-    let _ = walker.join();
-
-    if cancel.load(Ordering::SeqCst) {
-        // Don't reconcile deletions on a partial scan (seen is incomplete).
-        emit_progress(app, lib_id, seen.len() as u32, changed, true, true);
-        let _ = app.emit("dataset-changed", ());
-        return;
-    }
 
     // Reconcile deletions: any DB model for this library not seen on disk is gone.
     let mut removed = 0u32;
@@ -1599,6 +1675,48 @@ mod tests {
     fn touch(p: &Path, bytes: usize) {
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, vec![0u8; bytes]).unwrap();
+    }
+
+    // Run the live collector + grouper over a temp tree (mirrors do_scan phases 1–2).
+    fn group(root: &Path) -> Vec<GroupedModel> {
+        let dirs = std::sync::Arc::new(std::sync::Mutex::new(BTreeMap::new()));
+        let d2 = dirs.clone();
+        let on_dir: Arc<dyn Fn(PathBuf, Vec<ScannedFile>, i64) + Send + Sync> =
+            Arc::new(move |p, f, m| { d2.lock().unwrap().insert(p, (f, m)); });
+        collect_tree(root, Arc::new(AtomicBool::new(false)), 4, on_dir);
+        let map = dirs.lock().unwrap().clone();
+        group_models(root, &map)
+    }
+
+    #[test]
+    fn groups_subtrees_and_containers() {
+        let root = std::env::temp_dir().join(format!("trove_grp_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // Model whose printables live in variant subfolders, images at the top
+        // (Squirtle pattern) → must be ONE model, not "Life Sized"/"150mm".
+        touch(&root.join("Squirtle/front.jpg"), 1000);
+        touch(&root.join("Squirtle/Life Sized/body.stl"), 2000);
+        touch(&root.join("Squirtle/150mm/body.stl"), 2000);
+        // A container (tier) of two distinct models → each its own model.
+        touch(&root.join("Tier/Goku Helmet/helmet.stl"), 1500);
+        touch(&root.join("Tier/Goku Helmet/render.png"), 500);
+        touch(&root.join("Tier/Vegeta Helmet/helmet.stl"), 1500);
+
+        let models = group(&root);
+        let names: Vec<String> = models.iter().map(|g| file_name(&g.dir)).collect();
+        assert!(names.contains(&"Squirtle".to_string()), "got {names:?}");
+        assert!(names.contains(&"Goku Helmet".to_string()), "got {names:?}");
+        assert!(names.contains(&"Vegeta Helmet".to_string()), "got {names:?}");
+        // The variant subfolders and the container are NOT their own models.
+        assert!(!names.iter().any(|n| n == "Life Sized" || n == "150mm" || n == "Tier"), "got {names:?}");
+        assert_eq!(models.len(), 3, "got {names:?}");
+
+        // Squirtle absorbed both variant STLs + uses the top-level image as preview.
+        let sq = models.iter().find(|g| file_name(&g.dir) == "Squirtle").unwrap();
+        assert_eq!(sq.files.iter().filter(|f| is_printable(&f.ext)).count(), 2);
+        assert!(pick_preview(&sq.files).unwrap().ends_with("front.jpg"));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
