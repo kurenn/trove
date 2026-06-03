@@ -37,6 +37,23 @@
 .page-title { font-size: 30px; font-weight: 700; letter-spacing: -.015em; }
 .page-sub { color: var(--ink-2); font-size: 14px; margin-top: 5px; }
 
+/* detail viewer poster (instant cached image; loads 3D on demand) */
+.viewer-poster {
+  position: absolute; inset: 0; width: 100%; height: 100%; border: none; padding: 0; margin: 0;
+  background: var(--surface-2); cursor: pointer; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.viewer-poster:disabled { cursor: default; }
+.viewer-poster img { width: 100%; height: 100%; object-fit: contain; }
+.viewer-load-cta {
+  position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 13px;
+  padding: 9px 16px; border-radius: 999px; box-shadow: 0 10px 26px -10px rgba(0,0,0,.55);
+  transition: filter .14s, transform .14s; pointer-events: none;
+}
+.viewer-poster:hover .viewer-load-cta { filter: brightness(1.06); transform: translateX(-50%) translateY(-1px); }
+
 /* update-available banner (under the topbar) */
 .update-banner {
   display: flex; align-items: center; gap: 10px;

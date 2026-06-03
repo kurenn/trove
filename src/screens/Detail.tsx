@@ -8,7 +8,6 @@ import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, f
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
 import { isTauri, revealInManager, copyText } from "../lib/tauri";
-import { requestThumb } from "../three/thumbs";
 import type { Creator, Model } from "../data/types";
 
 const UNKNOWN_CREATOR: Creator = { id: "", name: "Unknown", handle: "", models: 0, blurb: "", tone: "var(--ink-3)" };
@@ -26,17 +25,21 @@ export function DetailScreen({ model }: { model: Model }) {
   const [mode, setMode] = useState<ViewerMode>("rotate");
   const [auto, setAuto] = useState(true);
   const [realDims, setRealDims] = useState<{ w: number; d: number; h: number } | null>(null);
+  // The live interactive mesh is loaded on demand (it streams the full file off
+  // disk/NAS — slow for big models). Until then we show the cached image poster,
+  // so opening a model is instant. Resets to the poster on each new model.
+  const [show3D, setShow3D] = useState(false);
   const parts = m.parts;
   // Default to an STL part if present — binary STLs load reliably; a .3mf (often
   // alphabetically first) can be slow/unparseable and would fall back to a shape.
   const stlIdx = Math.max(0, parts.findIndex((p) => (p.files[0]?.type || "").toLowerCase() === "stl"));
   const [sel, setSel] = useState(stlIdx);
-  useEffect(() => { setSel(stlIdx); setRealDims(null); }, [m.id]);
-  // Generate + cache this model's real thumbnail on open (one mesh, lazily) so
-  // the grid shows the real shape afterward — without ever doing this en masse.
-  useEffect(() => { if (!m.thumb) requestThumb(m); }, [m.id, m.thumb]);
+  useEffect(() => { setSel(stlIdx); setRealDims(null); setShow3D(false); }, [m.id]);
   const part = parts[sel] || parts[0];
   const partFile = part.files[0];
+  // Cached local image used as the instant poster (downscaled render / rendered thumb).
+  const liveThumb = useApp((s) => s.thumbs[m.id]);
+  const poster = liveThumb ?? m.thumb;
   // Real bounds from the loaded mesh take priority over the demo volume estimate.
   const dims = realDims ?? modelDims(m);
   const dimVal = (n: number) => (n ? n : "—");
@@ -78,23 +81,37 @@ export function DetailScreen({ model }: { model: Model }) {
         <div>
           <div className="viewer-shell">
             <div className="viewer-stage">
-              <Viewer3D
-                geometry={part.geometry}
-                color={part.color}
-                mode={mode}
-                autoRotate={auto && mode === "rotate"}
-                filePath={partFile?.path}
-                fileExt={partFile?.type}
-                onDims={setRealDims}
-              />
-              <div className="viewer-hint">{HINTS[mode]}</div>
-              {parts.length > 1 && <div className="viewer-part-label"><Icon name="cube" size={13} /> {part.name}</div>}
-              <div className="viewer-toolbar">
-                <button className={"vtool" + (mode === "rotate" ? " is-active" : "")} onClick={() => setMode("rotate")}><Icon name="refresh" size={16} /> Rotate</button>
-                <button className={"vtool" + (mode === "measure" ? " is-active" : "")} onClick={() => setMode("measure")}><Icon name="ruler" size={16} /> Measure</button>
-                {mode === "rotate" &&
-                  <button className={"vtool" + (auto ? " is-active" : "")} onClick={() => setAuto(!auto)} title="Turntable"><Icon name="history" size={16} /></button>}
-              </div>
+              {show3D || !partFile?.path ? (
+                // Real file → on user request; no path (mock/demo) → instant procedural.
+                <>
+                  <Viewer3D
+                    geometry={part.geometry}
+                    color={part.color}
+                    mode={mode}
+                    autoRotate={auto && mode === "rotate"}
+                    filePath={partFile?.path}
+                    fileExt={partFile?.type}
+                    onDims={setRealDims}
+                  />
+                  <div className="viewer-hint">{HINTS[mode]}</div>
+                  {parts.length > 1 && <div className="viewer-part-label"><Icon name="cube" size={13} /> {part.name}</div>}
+                  <div className="viewer-toolbar">
+                    <button className={"vtool" + (mode === "rotate" ? " is-active" : "")} onClick={() => setMode("rotate")}><Icon name="refresh" size={16} /> Rotate</button>
+                    <button className={"vtool" + (mode === "measure" ? " is-active" : "")} onClick={() => setMode("measure")}><Icon name="ruler" size={16} /> Measure</button>
+                    {mode === "rotate" &&
+                      <button className={"vtool" + (auto ? " is-active" : "")} onClick={() => setAuto(!auto)} title="Turntable"><Icon name="history" size={16} /></button>}
+                  </div>
+                </>
+              ) : (
+                // Instant poster (cached local image). The full mesh streams only
+                // when the user opts in — keeps opening a model fast on a NAS.
+                <button className="viewer-poster" onClick={() => partFile?.path && setShow3D(true)} disabled={!partFile?.path}>
+                  {poster
+                    ? <img src={poster} alt={part.name} draggable={false} />
+                    : <span className="spool-thumb-ph-icon" style={{ color: part.color }}><Icon name="cube" size={48} /></span>}
+                  {partFile?.path && <span className="viewer-load-cta"><Icon name="cube" size={16} /> View in 3D</span>}
+                </button>
+              )}
             </div>
           </div>
           <div className="dims-row">
