@@ -1,0 +1,191 @@
+/* launcher.css — Trove Quick Find: an original, system-launcher-style overlay
+   floating over a blurred desktop. Distinct from the in-app ⌘K palette.
+   Skin is driven by [data-skin] (warm | dark | light); wallpaper by [data-wall]. */
+
+.lz, .lz * { box-sizing: border-box; }
+.lz {
+  position: fixed; inset: 0; overflow: hidden;
+  font-family: var(--font-body);
+  --accent: #c2693d; --accent-ink: #fff7f0;
+  --glass-blur: 30px;
+}
+
+/* ===== desktop ===== */
+.lz-desktop { position: absolute; inset: 0; }
+.lz[data-wall="dusk"]  .lz-desktop { background:
+  radial-gradient(80% 60% at 78% 12%, #e6a15a 0%, transparent 55%),
+  radial-gradient(70% 70% at 12% 88%, #7d4b86 0%, transparent 60%),
+  linear-gradient(150deg, #c2693d 0%, #8a4f6e 42%, #3b3457 100%); }
+.lz[data-wall="night"] .lz-desktop { background:
+  radial-gradient(70% 60% at 80% 10%, #2f5d7a 0%, transparent 55%),
+  radial-gradient(80% 70% at 15% 90%, #1b2540 0%, transparent 60%),
+  linear-gradient(155deg, #18223a 0%, #131726 55%, #0c0e16 100%); }
+.lz[data-wall="sand"]  .lz-desktop { background:
+  radial-gradient(75% 60% at 75% 14%, #f0d8b8 0%, transparent 55%),
+  radial-gradient(70% 70% at 14% 90%, #d9b48c 0%, transparent 60%),
+  linear-gradient(155deg, #e9cdac 0%, #d7a878 50%, #b9835a 100%); }
+/* soft floating light blobs for depth */
+.lz-desktop::before, .lz-desktop::after {
+  content: ""; position: absolute; border-radius: 50%; filter: blur(60px); opacity: .5; pointer-events: none;
+}
+.lz-desktop::before { width: 40vw; height: 40vw; left: -8vw; top: -10vw; background: rgba(255,255,255,.22); }
+.lz-desktop::after  { width: 32vw; height: 32vw; right: -6vw; bottom: -8vw; background: rgba(255,255,255,.12); }
+
+/* dim + blur the wallpaper while the launcher is open */
+.lz-scrim { position: absolute; inset: 0; background: rgba(20,14,8,.28); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); opacity: 0; transition: opacity .28s ease; pointer-events: none; }
+.lz.open .lz-scrim { opacity: 1; }
+
+/* faux desktop top bar (generic, not app chrome) */
+.lz-topbar {
+  position: absolute; top: 0; left: 0; right: 0; height: 30px; z-index: 2;
+  display: flex; align-items: center; gap: 16px; padding: 0 16px; white-space: nowrap;
+  background: rgba(255,255,255,.10); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  color: rgba(255,255,255,.92); font-size: 12.5px; font-weight: 600;
+  border-bottom: 1px solid rgba(255,255,255,.10);
+}
+.lz-topbar > * { flex-shrink: 0; }
+.lz-topbar .tb-brand { display: flex; align-items: center; gap: 7px; font-weight: 700; letter-spacing: -.01em; }
+.lz-topbar .tb-spacer { flex: 1; }
+.lz-topbar .tb-item { opacity: .9; font-variant-numeric: tabular-nums; }
+.lz-topbar .tb-dot { width: 13px; height: 13px; border-radius: 50%; background: rgba(255,255,255,.45); }
+
+/* closed-state hint chip, centered */
+.lz-hint {
+  position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%);
+  display: flex; align-items: center; gap: 12px; z-index: 3; cursor: pointer;
+  padding: 14px 20px; border-radius: 999px; color: #fff; font-weight: 600; font-size: 15px;
+  background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 10px 30px -10px rgba(0,0,0,.4); transition: transform .15s, background .15s;
+}
+.lz-hint:hover { background: rgba(255,255,255,.2); transform: translate(-50%,-50%) scale(1.02); }
+.lz-hint kbd { font-family: var(--font-mono); font-size: 12px; background: rgba(255,255,255,.22); border-radius: 6px; padding: 3px 8px; }
+
+/* ===== launcher panel ===== */
+.lz-wrap { position: absolute; inset: 0; z-index: 4; display: flex; align-items: flex-start; justify-content: center; padding: 13vh 20px 40px; pointer-events: none; }
+.lz-panel {
+  pointer-events: auto; width: min(780px, 94vw);
+  background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 22px;
+  box-shadow: 0 40px 100px -24px rgba(0,0,0,.55), 0 12px 30px -12px rgba(0,0,0,.4), inset 0 1px 0 var(--glass-hi);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.5); -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.5);
+  color: var(--glass-ink); overflow: hidden;
+  transform: scale(.965) translateY(-8px); transition: transform .26s cubic-bezier(.2,.9,.3,1);
+}
+.lz.open .lz-panel { transform: none; }
+
+/* skins */
+.lz[data-skin="warm"] {
+  --glass-bg: rgba(255,251,245,.72); --glass-border: rgba(120,80,40,.18); --glass-hi: rgba(255,255,255,.5);
+  --glass-ink: #2c241c; --glass-ink2: #6b5d4e; --glass-ink3: #9a8b78;
+  --glass-row: rgba(255,255,255,.45); --glass-active: rgba(194,105,61,.16); --glass-active-bd: rgba(194,105,61,.4);
+  --glass-pane: rgba(247,240,231,.5); --glass-line: rgba(120,80,40,.14); --glass-chip: rgba(255,255,255,.6);
+}
+.lz[data-skin="dark"] {
+  --glass-bg: rgba(30,25,20,.6); --glass-border: rgba(255,255,255,.14); --glass-hi: rgba(255,255,255,.1);
+  --glass-ink: #f4ece0; --glass-ink2: #c8baa6; --glass-ink3: #8c7d6a;
+  --glass-row: rgba(255,255,255,.04); --glass-active: rgba(194,105,61,.32); --glass-active-bd: rgba(216,135,90,.55);
+  --glass-pane: rgba(0,0,0,.18); --glass-line: rgba(255,255,255,.1); --glass-chip: rgba(255,255,255,.08);
+}
+.lz[data-skin="light"] {
+  --glass-bg: rgba(255,255,255,.76); --glass-border: rgba(0,0,0,.08); --glass-hi: rgba(255,255,255,.7);
+  --glass-ink: #1b1a19; --glass-ink2: #57534f; --glass-ink3: #8a8581;
+  --glass-row: rgba(255,255,255,.5); --glass-active: rgba(194,105,61,.14); --glass-active-bd: rgba(194,105,61,.4);
+  --glass-pane: rgba(248,246,243,.55); --glass-line: rgba(0,0,0,.07); --glass-chip: rgba(0,0,0,.04);
+}
+
+/* search header */
+.lz-search { display: flex; align-items: center; gap: 14px; padding: 18px 22px; border-bottom: 1px solid var(--glass-line); }
+.lz-search .mag { color: var(--glass-ink3); flex-shrink: 0; }
+.lz-input { flex: 1; border: none; background: none; outline: none; font-family: var(--font-body); font-size: 23px; font-weight: 500; letter-spacing: -.01em; color: var(--glass-ink); min-width: 0; }
+.lz-input::placeholder { color: var(--glass-ink3); font-weight: 400; }
+.lz-esc { font-family: var(--font-mono); font-size: 11px; color: var(--glass-ink3); border: 1px solid var(--glass-line); border-radius: 6px; padding: 4px 8px; flex-shrink: 0; }
+
+/* body: results | preview */
+.lz-body { display: grid; grid-template-columns: 1.32fr 1fr; min-height: 340px; }
+.lz-results { padding: 8px; overflow-y: auto; max-height: 60vh; border-right: 1px solid var(--glass-line); }
+.lz-sect { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--glass-ink3); padding: 12px 12px 6px; }
+.lz-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 12px; border: none; background: none; border-radius: 12px; cursor: pointer; text-align: left; color: inherit; font-family: inherit; }
+.lz-row:hover { background: var(--glass-row); }
+.lz-row.active { background: var(--glass-active); box-shadow: inset 0 0 0 1px var(--glass-active-bd); }
+.lz-row .nm { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lz-row .nm.mono { font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
+.lz-row .sub { font-size: 12px; color: var(--glass-ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 4px; }
+.lz-row .grow { flex: 1; min-width: 0; }
+.lz-hl { color: var(--accent); font-weight: 800; }
+
+/* type chip / thumb */
+.lz-ftype { width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-family: var(--font-mono); font-weight: 700; font-size: 10.5px; text-transform: uppercase; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
+.lz-folder-ico { width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #fff; }
+.lz-thumb { width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0; }
+
+/* preview pane */
+.lz-preview { padding: 22px; background: var(--glass-pane); display: flex; flex-direction: column; }
+.lz-pv-empty { margin: auto; text-align: center; color: var(--glass-ink3); padding: 30px 10px; }
+.lz-pv-thumb { width: 100%; aspect-ratio: 1.3; border-radius: 16px; overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; box-shadow: 0 12px 28px -14px rgba(0,0,0,.5); }
+.lz-pv-thumb canvas, .lz-pv-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.lz-pv-badge { position: absolute; right: 10px; bottom: 10px; font-family: var(--font-mono); font-weight: 700; font-size: 11px; text-transform: uppercase; color: #fff; background: rgba(0,0,0,.42); border-radius: 7px; padding: 4px 8px; backdrop-filter: blur(6px); }
+.lz-pv-name { font-family: var(--font-mono); font-size: 15px; font-weight: 600; margin-top: 16px; word-break: break-all; line-height: 1.3; }
+.lz-pv-path { font-size: 12px; color: var(--glass-ink2); margin-top: 6px; display: flex; align-items: center; gap: 5px; word-break: break-all; }
+.lz-pv-meta { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--glass-line); border: 1px solid var(--glass-line); border-radius: 12px; overflow: hidden; }
+.lz-pv-meta div { background: var(--glass-pane); padding: 9px 12px; }
+.lz-pv-meta .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--glass-ink3); }
+.lz-pv-meta .v { font-size: 13px; font-weight: 600; margin-top: 2px; }
+.lz-pv-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.lz-pv-tag { font-size: 11.5px; font-weight: 600; color: var(--glass-ink2); background: var(--glass-chip); border: 1px solid var(--glass-line); border-radius: 999px; padding: 3px 10px; }
+.lz-pv-spacer { flex: 1; }
+.lz-actions { display: flex; gap: 8px; margin-top: 18px; }
+.lz-btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 40px; border-radius: 11px; border: 1px solid var(--glass-line); background: var(--glass-chip); color: var(--glass-ink); font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: filter .14s, transform .08s; white-space: nowrap; }
+.lz-btn:hover { filter: brightness(1.05); }
+.lz-btn:active { transform: translateY(1px); }
+.lz-btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; flex: 1.4; }
+.lz-iconbtn { flex: 0 0 auto; width: 40px; }
+
+/* footer */
+.lz-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 18px; border-top: 1px solid var(--glass-line); font-size: 12px; color: var(--glass-ink3); }
+.lz-foot .keys { display: flex; align-items: center; gap: 12px; }
+.lz-foot kbd { font-family: var(--font-mono); font-size: 11px; background: var(--glass-chip); border: 1px solid var(--glass-line); border-radius: 5px; padding: 2px 6px; color: var(--glass-ink2); }
+.lz-foot .ct { font-variant-numeric: tabular-nums; }
+
+/* empty/no-match */
+.lz-noresult { text-align: center; color: var(--glass-ink3); padding: 46px 20px; }
+
+/* toast */
+.lz-toast { position: absolute; left: 50%; bottom: 7vh; transform: translateX(-50%); z-index: 6; background: rgba(20,16,12,.86); color: #fff; padding: 11px 18px; border-radius: 12px; font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 9px; box-shadow: 0 14px 34px -12px rgba(0,0,0,.5); backdrop-filter: blur(10px); animation: lzToast .25s ease both; }
+@keyframes lzToast { from { transform: translateX(-50%) translateY(10px); opacity: 0; } to { transform: translateX(-50%); opacity: 1; } }
+
+@media (max-width: 720px) {
+  .lz-body { grid-template-columns: 1fr; }
+  .lz-preview { display: none; }
+  .lz-input { font-size: 19px; }
+}
+
+/* ===== production: the launcher is its own transparent, frameless window =====
+   The window is a full-screen, transparent, always-on-top overlay sized to the
+   monitor (see quickfind.rs::cover_active_monitor). We draw our OWN dim+blur
+   scrim over the real desktop and float the glass panel near the top third —
+   the design's look, minus the prototype's faux wallpaper/topbar/hint. */
+html.lz-window, html.lz-window body, html.lz-window #root { background: transparent !important; height: 100%; margin: 0; }
+.lz.lz-standalone { background: transparent; }
+
+/* dim + blur the desktop behind the transparent overlay; click anywhere = dismiss */
+.lz.lz-standalone .lz-scrim {
+  position: fixed; inset: 0; z-index: 1; cursor: default;
+  background: rgba(20,14,8,.28);
+  backdrop-filter: blur(7px) saturate(1.1); -webkit-backdrop-filter: blur(7px) saturate(1.1);
+  opacity: 0; transition: opacity .28s ease;
+}
+.lz.lz-standalone.open .lz-scrim { opacity: 1; }
+
+/* top-aligned, centered float — the panel re-enables pointer events; the empty
+   area around it falls through to the scrim so clicks there dismiss. */
+.lz.lz-standalone .lz-wrap {
+  position: fixed; inset: 0; z-index: 2; pointer-events: none;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 12vh 20px 40px;
+}
+.lz.lz-standalone .lz-panel {
+  pointer-events: auto;
+  transform: scale(.965) translateY(-8px);
+  transition: transform .26s cubic-bezier(.2,.9,.3,1);
+}
+.lz.lz-standalone.open .lz-panel { transform: none; }

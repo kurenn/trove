@@ -1,0 +1,22 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+
+# Logs
+*.log
+
+# Build artifacts (in case they land outside target/)
+*.dmg
+*.app
+
+# Rust / Tauri
+src-tauri/target
+src-tauri/gen/schemas
