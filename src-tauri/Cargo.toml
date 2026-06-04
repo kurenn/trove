@@ -1,6 +1,6 @@
 [package]
 name = "trove"
-version = "2.0.7"
+version = "2.0.8"
 description = "Trove — self-hosted 3D print library"
 authors = ["Spoolr"]
 license = "MIT"
@@ -30,6 +30,8 @@ base64 = "0.22"
 notify = "6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+zstd = "0.13"
+flate2 = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

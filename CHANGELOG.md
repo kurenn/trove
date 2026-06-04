@@ -5,6 +5,13 @@ The section for each version becomes that version's GitHub release notes.
 
 ## [Unreleased]
 
+## [2.0.8]
+### Fixed
+- Folders that contain a Blender `.blend` file but no printable mesh are now indexed as models (previously skipped, so the .blend was invisible).
+
+### Added
+- `.blend` thumbnail previews now work for Blender's compressed saves (zstd/gzip), not just uncompressed files.
+
 ## [2.0.7]
 ### Added
 - Previews now come from embedded thumbnails too: `.3mf` slicer/project files (reliable) and `.blend` files (best-effort), cached locally — so 3mf/blend-only models show a real preview without rendering a mesh.

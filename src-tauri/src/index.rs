@@ -182,6 +182,12 @@ fn is_printable(ext: &str) -> bool {
     PRINTABLE.contains(&ext) || ext == "step"
 }
 
+/// Files that define a model on their own: printable meshes plus Blender sources.
+/// A folder containing one of these (even a `.blend`-only folder) is a model.
+fn is_model_file(ext: &str) -> bool {
+    is_printable(ext) || ext == "blend"
+}
+
 /// Heuristic auto-tagging from folder/file names. Returns (tags, supports).
 fn auto_tags(haystack: &str, file_exts: &[String], multi: bool) -> (Vec<String>, bool) {
     let h = haystack.to_lowercase();
@@ -755,10 +761,11 @@ fn collect_tree(
 /// ancestor-or-self model root, so a model absorbs its whole subtree (nested STL
 /// folders → parts, any image → preview). Models with no printable are dropped.
 fn group_models(root: &Path, dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>) -> Vec<GroupedModel> {
-    // A "candidate" directly holds loose media (a printable OR an image).
+    // A "candidate" directly holds loose media: a model file (printable or .blend)
+    // or an image.
     let candidates: HashSet<PathBuf> = dirs
         .iter()
-        .filter(|(_, (files, _))| files.iter().any(|f| is_printable(&f.ext) || is_image(&f.ext)))
+        .filter(|(_, (files, _))| files.iter().any(|f| is_model_file(&f.ext) || is_image(&f.ext)))
         .map(|(p, _)| p.clone())
         .collect();
     // A model root is the SHALLOWEST candidate in its chain — a candidate with no
@@ -810,7 +817,7 @@ fn group_models(root: &Path, dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>) 
     }
 
     acc.into_iter()
-        .filter(|(_, (files, _))| files.iter().any(|f| is_printable(&f.ext)))
+        .filter(|(_, (files, _))| files.iter().any(|f| is_model_file(&f.ext)))
         .map(|(dir, (files, fingerprint))| GroupedModel { dir, files, fingerprint })
         .collect()
 }
@@ -1144,9 +1151,28 @@ fn extract_3mf_thumbnail(path: &Path) -> Option<Vec<u8>> {
 /// stores it in a `TEST` file-block (width, height, then RGBA). Compressed blends
 /// (gzip/zstd) are skipped. Returns PNG bytes.
 fn extract_blend_thumbnail(path: &Path) -> Option<Vec<u8>> {
-    let data = std::fs::read(path).ok()?;
+    use std::io::Read;
+    // The thumbnail block sits near the start; decode a bounded prefix so a giant
+    // .blend (hundreds of MB) doesn't get slurped into memory. Handles uncompressed
+    // and Blender's compressed saves (zstd in 4.x, gzip in older).
+    const CAP: u64 = 48 * 1024 * 1024;
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path).ok()?.read_exact(&mut magic).ok()?;
+    let file = std::fs::File::open(path).ok()?;
+    let mut data = Vec::new();
+    if &magic == b"BLEN" {
+        file.take(CAP).read_to_end(&mut data).ok()?;
+    } else if magic == [0x28, 0xB5, 0x2F, 0xFD] {
+        let mut dec = zstd::stream::read::Decoder::new(file).ok()?;
+        let _ = dec.take(CAP).read_to_end(&mut data); // may stop mid-stream at CAP — fine
+    } else if magic[0] == 0x1F && magic[1] == 0x8B {
+        let mut dec = flate2::read::GzDecoder::new(file);
+        let _ = dec.take(CAP).read_to_end(&mut data);
+    } else {
+        return None;
+    }
     if data.len() < 12 || &data[0..7] != b"BLENDER" {
-        return None; // compressed or not a blend → skip (best-effort)
+        return None;
     }
     let ptr = if data[7] == b'-' { 8 } else { 4 };
     let big = data[8] == b'V';
