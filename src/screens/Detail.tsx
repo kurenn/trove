@@ -16,6 +16,10 @@ const UNKNOWN_CREATOR: Creator = { id: "", name: "Unknown", handle: "", models: 
 // otherwise turn the page into an endless scroll).
 const PART_CAP = 10;
 
+// Editable / project / bundle files worth surfacing on their own (Blender scenes,
+// 3MF projects, slicer projects, archives) — distinct from the printable meshes.
+const SOURCE_TYPES = ["blend", "3mf", "chitubox", "lys", "zip"];
+
 export function DetailScreen({ model }: { model: Model }) {
   const nav = useApp((s) => s.nav);
   const fav = useApp((s) => s.fav);
@@ -50,8 +54,18 @@ export function DetailScreen({ model }: { model: Model }) {
   const dimVal = (n: number) => (n ? n : "—");
   const isFav = fav.includes(m.id);
   const sims = similar(m);
+  // Project/source files anywhere in this model's folder tree (Blender, 3MF, etc.).
+  const sourceFiles = m.files.filter((f) => SOURCE_TYPES.includes((f.type || "").toLowerCase()));
 
   const HINTS: Record<ViewerMode, string> = { rotate: "drag to rotate · scroll to zoom", measure: "bounding box dimensions" };
+
+  const revealFile = async (path?: string) => {
+    if (isTauri && path) {
+      try { await revealInManager(path); toast("Revealed in your file manager"); return; }
+      catch (e) { toast(String(e)); return; }
+    }
+    toast("Revealed in your file manager");
+  };
 
   const openFolder = async () => {
     if (isTauri && partFile?.path) {
@@ -134,6 +148,22 @@ export function DetailScreen({ model }: { model: Model }) {
               <span className="muted"><Icon name="history" size={14} style={{ verticalAlign: "-2px" }} /> Added {fmtDate(m.added)}</span>
             </div>
           </div>
+
+          {sourceFiles.length > 0 &&
+            <div className="panel">
+              <div className="panel-h"><Icon name="folder" size={18} /> Project &amp; source files <span className="faint" style={{ fontWeight: 500, marginLeft: 4 }}>{sourceFiles.length}</span></div>
+              {sourceFiles.map((f) =>
+                <button key={f.path || f.name} className="part-row" onClick={() => revealFile(f.path)} title="Reveal in folder">
+                  <div className="file-ico">{f.type.toUpperCase()}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="file-name">{f.name}</div>
+                    <div className="file-sub">{f.type.toUpperCase()} · {fmtSize(f.size)}</div>
+                  </div>
+                  <Icon name="folder" size={16} style={{ color: "var(--ink-3)", flexShrink: 0 }} />
+                </button>
+              )}
+            </div>
+          }
         </div>
 
         <div>
