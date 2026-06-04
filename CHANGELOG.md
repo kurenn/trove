@@ -5,7 +5,7 @@ The section for each version becomes that version's GitHub release notes.
 
 ## [Unreleased]
 
-## [2.0.8]
+## [2.0.9]
 ### Fixed
 - A real model with no renderable mesh (e.g. a Blender `.blend`) now shows its cached thumbnail (or a neutral BLEND tile) in the viewer instead of a misleading procedural placeholder shape.
 - Slicer-project `.3mf` files (Bambu/Orca, which reference the mesh externally) showed "Couldn't render a preview" in the 3D viewer; they now fall back to the embedded plate render instead.
