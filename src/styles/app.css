@@ -37,6 +37,10 @@
 .page-title { font-size: 30px; font-weight: 700; letter-spacing: -.015em; }
 .page-sub { color: var(--ink-2); font-size: 14px; margin-top: 5px; }
 
+/* parts list — contained scroll so big multi-part models don't run off the page */
+.part-list { display: flex; flex-direction: column; gap: 6px; max-height: 460px; overflow-y: auto; }
+.part-list .part-row { margin: 0; }
+
 /* detail viewer poster (instant cached image; loads 3D on demand) */
 .viewer-poster {
   position: absolute; inset: 0; width: 100%; height: 100%; border: none; padding: 0; margin: 0;

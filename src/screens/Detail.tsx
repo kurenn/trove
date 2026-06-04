@@ -12,6 +12,10 @@ import type { Creator, Model } from "../data/types";
 
 const UNKNOWN_CREATOR: Creator = { id: "", name: "Unknown", handle: "", models: 0, blurb: "", tone: "var(--ink-3)" };
 
+// Show this many parts before the list scrolls / collapses (big multi-part models
+// otherwise turn the page into an endless scroll).
+const PART_CAP = 10;
+
 export function DetailScreen({ model }: { model: Model }) {
   const nav = useApp((s) => s.nav);
   const fav = useApp((s) => s.fav);
@@ -29,12 +33,13 @@ export function DetailScreen({ model }: { model: Model }) {
   // disk/NAS — slow for big models). Until then we show the cached image poster,
   // so opening a model is instant. Resets to the poster on each new model.
   const [show3D, setShow3D] = useState(false);
+  const [showAllParts, setShowAllParts] = useState(false);
   const parts = m.parts;
   // Default to an STL part if present — binary STLs load reliably; a .3mf (often
   // alphabetically first) can be slow/unparseable and would fall back to a shape.
   const stlIdx = Math.max(0, parts.findIndex((p) => (p.files[0]?.type || "").toLowerCase() === "stl"));
   const [sel, setSel] = useState(stlIdx);
-  useEffect(() => { setSel(stlIdx); setRealDims(null); setShow3D(false); }, [m.id]);
+  useEffect(() => { setSel(stlIdx); setRealDims(null); setShow3D(false); setShowAllParts(false); }, [m.id]);
   const part = parts[sel] || parts[0];
   const partFile = part.files[0];
   // Cached local image used as the instant poster (downscaled render / rendered thumb).
@@ -163,16 +168,25 @@ export function DetailScreen({ model }: { model: Model }) {
             <div className="panel-h"><Icon name="cube" size={18} /> {parts.length > 1 ? "Parts" : "Part"} <span className="faint" style={{ fontWeight: 500, marginLeft: 4 }}>{parts.length}</span>
               {parts.length > 1 && <span className="faint" style={{ fontWeight: 500, fontSize: 12.5, marginLeft: "auto" }}>tap to view</span>}
             </div>
-            {parts.map((p, i) =>
-              <button key={p.id} className={"part-row" + (i === sel ? " active" : "")} onClick={() => setSel(i)}>
-                <Thumb geometry={p.geometry} color={p.color} className="part-thumb" real={!!p.files[0]?.path} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="file-name">{p.name}</div>
-                  <div className="file-sub">{p.files.map((fl) => fl.type.toUpperCase()).join(" · ")} · {fmtSize(p.files.reduce((n, fl) => n + fl.size, 0))}</div>
-                </div>
-                {i === sel && <Icon name="eye" size={17} style={{ color: "var(--accent)", flexShrink: 0 }} />}
+            <div className="part-list">
+              {/* Cap the rows so a 100+ part model doesn't turn the page into an
+                  endless scroll; the selected part is always kept visible. */}
+              {parts.slice(0, showAllParts ? parts.length : Math.max(PART_CAP, sel + 1)).map((p, i) =>
+                <button key={p.id} className={"part-row" + (i === sel ? " active" : "")} onClick={() => setSel(i)}>
+                  <Thumb geometry={p.geometry} color={p.color} className="part-thumb" real={!!p.files[0]?.path} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="file-name">{p.name}</div>
+                    <div className="file-sub">{p.files.map((fl) => fl.type.toUpperCase()).join(" · ")} · {fmtSize(p.files.reduce((n, fl) => n + fl.size, 0))}</div>
+                  </div>
+                  {i === sel && <Icon name="eye" size={17} style={{ color: "var(--accent)", flexShrink: 0 }} />}
+                </button>
+              )}
+            </div>
+            {parts.length > PART_CAP &&
+              <button className="btn btn-sm" style={{ width: "100%", marginTop: 8 }} onClick={() => setShowAllParts((v) => !v)}>
+                {showAllParts ? "Show fewer" : `Show all ${parts.length} parts`}
               </button>
-            )}
+            }
             {m.extras && m.extras.length > 0 &&
               <>
                 <div className="faint" style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em", margin: "15px 0 9px" }}>Also in this folder</div>
