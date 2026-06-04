@@ -56,6 +56,11 @@ pub fn spawn_debouncer(app: AppHandle) -> Sender<String> {
 }
 
 pub fn start(app: &AppHandle, lib_id: &str, path: &str) {
+    // Never auto-watch network mounts — FSEvents over SMB/NFS fires phantom events
+    // that loop the scanner endlessly. Those libraries refresh via manual Reindex.
+    if index::is_network_path(std::path::Path::new(path)) {
+        return;
+    }
     let watchers = app.state::<Watchers>();
     let tx = app.state::<WatchTx>().0.clone();
     let id = lib_id.to_string();
@@ -97,6 +102,16 @@ pub fn start_all(app: &AppHandle) {
         mapped
     };
     for (id, path) in rows {
+        // Migrate existing network-mounted libraries off watch (they were the
+        // source of the endless rescan loop) so the UI reflects reality.
+        if index::is_network_path(std::path::Path::new(&path)) {
+            if let Some(db) = app.try_state::<Db>() {
+                if let Ok(c) = db.0.lock() {
+                    let _ = c.execute("UPDATE libraries SET watch=0 WHERE id=?1", [&id]);
+                }
+            }
+            continue;
+        }
         start(app, &id, &path);
     }
 }

@@ -82,6 +82,7 @@ export interface ScanProgress {
   done: boolean;
   cancelled: boolean;
   phase: string; // "scanning" | "previews" | "done"
+  changed: number; // new/changed models this scan
 }
 
 /** Live in-flight scan, surfaced in the sidebar indexing indicator. */
@@ -192,8 +193,9 @@ export const useApp = create<AppState>((set, get) => ({
       // …and drive the live sidebar indicator (cleared when the scan finishes).
       scan: p.done ? null : { libId: p.libId, phase: p.phase, files: p.files, models: p.models },
     }));
-    // Completion toast on a successful finish.
-    if (p.done && !p.cancelled) {
+    // Completion toast only when the scan actually changed something — keeps
+    // no-op/background rescans silent (no more phantom "Indexed N" spam).
+    if (p.done && !p.cancelled && p.changed > 0) {
       const lib = get().libraries.find((l) => l.id === p.libId);
       get().toast(`Indexed ${lib?.models ?? 0} model${(lib?.models ?? 0) === 1 ? "" : "s"}`);
     }

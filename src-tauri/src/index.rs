@@ -47,12 +47,14 @@ struct ScanProgress {
     cancelled: bool,
     /// "scanning" (walking + indexing) | "previews" (building image cache) | "done".
     phase: String,
+    /// New/changed models written this scan (lets the UI stay silent on no-op rescans).
+    changed: u32,
 }
 
-fn emit_progress(app: &tauri::AppHandle, lib_id: &str, models: u32, files: u32, done: bool, cancelled: bool, phase: &str) {
+fn emit_progress(app: &tauri::AppHandle, lib_id: &str, models: u32, files: u32, done: bool, cancelled: bool, phase: &str, changed: u32) {
     let _ = app.emit(
         "scan-progress",
-        ScanProgress { lib_id: lib_id.to_string(), models, files, done, cancelled, phase: phase.to_string() },
+        ScanProgress { lib_id: lib_id.to_string(), models, files, done, cancelled, phase: phase.to_string(), changed },
     );
 }
 
@@ -259,6 +261,38 @@ fn iso_date(secs: i64) -> String {
 }
 
 /// A path's modification time in epoch seconds (0 if unavailable).
+/// True if `path` is on a network filesystem (SMB/NFS/AFP/WebDAV). FSEvents over
+/// such mounts fires phantom/repeating change events, so we never auto-watch them
+/// (it caused an endless rescan loop). macOS uses statfs; other platforms assume local.
+#[cfg(target_os = "macos")]
+pub fn is_network_path(path: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c = match CString::new(path.as_os_str().as_bytes()) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    unsafe {
+        let mut sfs: libc::statfs = std::mem::zeroed();
+        if libc::statfs(c.as_ptr(), &mut sfs) != 0 {
+            return false;
+        }
+        let ty: String = sfs
+            .f_fstypename
+            .iter()
+            .take_while(|&&ch| ch != 0)
+            .map(|&ch| ch as u8 as char)
+            .collect::<String>()
+            .to_lowercase();
+        ["smb", "nfs", "afp", "webdav", "cifs", "ftp"].iter().any(|k| ty.contains(k))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_network_path(_path: &Path) -> bool {
+    false
+}
+
 fn mtime_secs(p: &Path) -> i64 {
     std::fs::metadata(p)
         .and_then(|m| m.modified())
@@ -797,14 +831,14 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
     if let Ok(conn) = db.0.lock() {
         let _ = conn.execute("UPDATE libraries SET status='scanning' WHERE id=?1", params![lib_id]);
     }
-    emit_progress(app, lib_id, 0, 0, false, false, "scanning");
+    emit_progress(app, lib_id, 0, 0, false, false, "scanning", 0);
 
     if !root_ok {
         if let Ok(conn) = db.0.lock() {
             let _ = conn.execute("UPDATE libraries SET status='error', last='just now' WHERE id=?1", params![lib_id]);
         }
         eprintln!("[scan] {lib_id}: cannot read {} (permission?)", root.display());
-        emit_progress(app, lib_id, 0, 0, true, false, "done");
+        emit_progress(app, lib_id, 0, 0, true, false, "done", 0);
         let _ = app.emit("dataset-changed", ());
         return;
     }
@@ -852,13 +886,13 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
         file_total += files.len() as u32;
         dirs.insert(p, (files, mt));
         if dirs.len() % 64 == 0 {
-            emit_progress(app, lib_id, 0, file_total, false, false, "scanning");
+            emit_progress(app, lib_id, 0, file_total, false, false, "scanning", 0);
         }
     }
     let _ = walker.join();
 
     if cancel.load(Ordering::SeqCst) {
-        emit_progress(app, lib_id, 0, file_total, true, true, "done");
+        emit_progress(app, lib_id, 0, file_total, true, true, "done", 0);
         let _ = app.emit("dataset-changed", ());
         return;
     }
@@ -884,7 +918,7 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
             flush_batch(&db.0, lib_id, &mut batch, &counters);
             if changed - last_reload >= 80 {
                 last_reload = changed;
-                emit_progress(app, lib_id, seen.len() as u32, changed, false, false, "scanning");
+                emit_progress(app, lib_id, seen.len() as u32, changed, false, false, "scanning", 0);
                 let _ = app.emit("dataset-changed", ());
             }
         }
@@ -939,11 +973,11 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
         .and_then(|c| c.query_row("SELECT thumbs FROM libraries WHERE id=?1", params![lib_id], |r| r.get::<_, i64>(0)).ok())
         .unwrap_or(1) != 0;
     if thumbs_on {
-        emit_progress(app, lib_id, total, 0, false, false, "previews");
+        emit_progress(app, lib_id, total, 0, false, false, "previews", 0);
         generate_image_thumbs(app, lib_id, &cancel);
     }
     // Final tick → clears the indicator + fires the completion toast.
-    emit_progress(app, lib_id, total, counters.get().1, true, false, "done");
+    emit_progress(app, lib_id, total, counters.get().1, true, false, "done", changed);
 }
 
 /// Downscale each model's folder image (its `preview`) into the local thumbnail
@@ -996,7 +1030,7 @@ fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<Atom
             // keep the indexing indicator's "Building previews… N" count moving.
             if done % 24 == 0 {
                 let _ = app.emit("dataset-changed", ());
-                emit_progress(app, lib_id, 0, done, false, false, "previews");
+                emit_progress(app, lib_id, 0, done, false, false, "previews", 0);
             }
         }
     }
@@ -1408,7 +1442,12 @@ pub fn add_library(
     if !root.is_dir() {
         return Err(format!("Not a folder: {path}"));
     }
-    let opts = options.unwrap_or_default();
+    let mut opts = options.unwrap_or_default();
+    // Network shares can't be reliably watched (phantom FSEvents loop), so never
+    // enable watch for them — they refresh via manual Reindex.
+    if is_network_path(&root) {
+        opts.watch = false;
+    }
     let lib_id = format!("l{:x}", fnv1a(&path));
     let lib_name = name.unwrap_or_else(|| prettify(&file_name(&root)));
 

@@ -4,6 +4,9 @@ All notable changes to Trove. This project uses [semantic versioning](https://se
 The section for each version becomes that version's GitHub release notes.
 
 ## [Unreleased]
+### Fixed
+- Network-mounted libraries (NAS) are no longer auto-watched — FSEvents over SMB/NFS was firing phantom events that looped the indexer endlessly. They refresh via manual Reindex. No-op rescans are now silent (no "Indexed N" toast unless something changed).
+
 ### Changed
 - Model detail "Parts" list is capped with its own scroll + a "Show all N parts" toggle, so models with many files no longer turn the page into an endless scroll.
 
