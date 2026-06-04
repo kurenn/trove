@@ -29,6 +29,7 @@ crossbeam-channel = "0.5"
 base64 = "0.22"
 notify = "6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

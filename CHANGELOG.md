@@ -5,6 +5,9 @@ The section for each version becomes that version's GitHub release notes.
 
 ## [Unreleased]
 ### Added
+- Previews now come from embedded thumbnails too: `.3mf` slicer/project files (reliable) and `.blend` files (best-effort), cached locally — so 3mf/blend-only models show a real preview without rendering a mesh.
+
+### Added
 - Model detail now has a "Project & source files" section (Blender `.blend`, `.3mf` projects, slicer projects, archives) under the About card, with reveal-in-folder.
 
 ### Fixed

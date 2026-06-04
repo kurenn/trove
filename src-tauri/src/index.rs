@@ -1008,9 +1008,6 @@ fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<Atom
             .unwrap_or_default(),
         Err(_) => return,
     };
-    if todo.is_empty() {
-        return;
-    }
 
     let mut done = 0u32;
     for (id, src) in todo {
@@ -1037,18 +1034,153 @@ fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<Atom
     if done > 0 {
         let _ = app.emit("dataset-changed", ());
     }
-    eprintln!("[scan] {lib_id}: cached {done} folder-image thumbnails");
+
+    // Embedded-thumbnail pass: models still without a cached preview → pull an
+    // embedded thumbnail from a .3mf (reliable) or .blend (best-effort) so 3mf/
+    // blend-only models get a real preview without rendering any mesh.
+    let rows: Vec<(String, String, String)> = match db.0.lock() {
+        Ok(conn) => conn
+            .prepare(
+                "SELECT m.id, f.path, f.type FROM models m
+                 JOIN files f ON f.model_id = m.id
+                 WHERE m.library_id=?1 AND (m.thumb IS NULL OR m.thumb='')
+                   AND f.type IN ('3mf','blend')",
+            )
+            .and_then(|mut st| {
+                st.query_map(params![lib_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                })
+                .map(|rs| rs.flatten().collect())
+            })
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    // One candidate per model, preferring a .3mf over a .blend.
+    let mut by_model: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
+    for (id, path, ty) in rows {
+        let e = by_model.entry(id).or_insert((None, None));
+        if ty == "3mf" {
+            if e.0.is_none() { e.0 = Some(path); }
+        } else if e.1.is_none() {
+            e.1 = Some(path);
+        }
+    }
+    let mut emb = 0u32;
+    for (id, (mf3, blend)) in by_model {
+        if cancel.load(Ordering::SeqCst) {
+            break;
+        }
+        let png = mf3.as_deref().and_then(|p| extract_3mf_thumbnail(Path::new(p)))
+            .or_else(|| blend.as_deref().and_then(|p| extract_blend_thumbnail(Path::new(p))));
+        if let Some(bytes) = png {
+            let out = dir.join(format!("{id}.jpg"));
+            if downscale_bytes(&bytes, &out, 512).is_ok() {
+                if let Ok(conn) = db.0.lock() {
+                    let _ = conn.execute("UPDATE models SET thumb=?2 WHERE id=?1", params![id, out.to_string_lossy().to_string()]);
+                }
+                emb += 1;
+                if emb % 24 == 0 {
+                    let _ = app.emit("dataset-changed", ());
+                    emit_progress(app, lib_id, 0, done + emb, false, false, "previews", 0);
+                }
+            }
+        }
+    }
+    if emb > 0 {
+        let _ = app.emit("dataset-changed", ());
+    }
+    eprintln!("[scan] {lib_id}: cached {done} folder-image + {emb} embedded thumbnails");
 }
 
 /// Decode an image, shrink so the longest side ≤ `max`, and write a JPEG.
 fn downscale_image(src: &Path, out: &Path, max: u32) -> Result<(), String> {
     let img = image::open(src).map_err(|e| e.to_string())?;
+    write_scaled(img, out, max)
+}
+
+/// Same as `downscale_image` but from in-memory image bytes (embedded thumbnails).
+fn downscale_bytes(bytes: &[u8], out: &Path, max: u32) -> Result<(), String> {
+    let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    write_scaled(img, out, max)
+}
+
+fn write_scaled(img: image::DynamicImage, out: &Path, max: u32) -> Result<(), String> {
     let scaled = if img.width().max(img.height()) > max {
         img.thumbnail(max, max) // fast box-filter shrink — fine for previews
     } else {
         img
     };
     scaled.to_rgb8().save(out).map_err(|e| e.to_string()) // .jpg ext → JPEG
+}
+
+/// Pull the embedded preview PNG out of a `.3mf` (a zip). Slicer projects store a
+/// plate render under `Metadata/`; prefer a descriptive name, else the largest PNG.
+fn extract_3mf_thumbnail(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).ok()?;
+    let names: Vec<String> = (0..zip.len())
+        .filter_map(|i| zip.by_index(i).ok().map(|f| f.name().to_string()))
+        .filter(|n| n.to_lowercase().ends_with(".png"))
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    let lower = |n: &str| n.to_lowercase();
+    let name = names.iter().find(|n| lower(n).ends_with("metadata/thumbnail.png"))
+        .or_else(|| names.iter().find(|n| lower(n).contains("thumbnail")))
+        .or_else(|| names.iter().find(|n| lower(n).contains("plate") && !lower(n).contains("small")))
+        .or_else(|| names.iter().find(|n| lower(n).contains("plate")))
+        .or_else(|| names.iter().find(|n| lower(n).contains("metadata/")))
+        .or_else(|| names.first())?
+        .clone();
+    let mut entry = zip.by_name(&name).ok()?;
+    let mut buf = Vec::new();
+    entry.read_to_end(&mut buf).ok()?;
+    if buf.is_empty() { None } else { Some(buf) }
+}
+
+/// Best-effort: pull the embedded thumbnail from an UNCOMPRESSED `.blend`. Blender
+/// stores it in a `TEST` file-block (width, height, then RGBA). Compressed blends
+/// (gzip/zstd) are skipped. Returns PNG bytes.
+fn extract_blend_thumbnail(path: &Path) -> Option<Vec<u8>> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 12 || &data[0..7] != b"BLENDER" {
+        return None; // compressed or not a blend → skip (best-effort)
+    }
+    let ptr = if data[7] == b'-' { 8 } else { 4 };
+    let big = data[8] == b'V';
+    let u32_at = |b: &[u8]| if big {
+        u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+    } else {
+        u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+    };
+    let header_len = 4 + 4 + ptr + 4 + 4; // code + size + old_ptr + sdna + count
+    let mut pos = 12;
+    while pos + header_len <= data.len() {
+        let code = &data[pos..pos + 4];
+        let size = u32_at(&data[pos + 4..pos + 8]) as usize;
+        let body = pos + header_len;
+        if code == b"ENDB" {
+            break;
+        }
+        if code == b"TEST" && body + 8 <= data.len() {
+            let w = u32_at(&data[body..body + 4]);
+            let h = u32_at(&data[body + 4..body + 8]);
+            let px = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
+            if w > 0 && h > 0 && w <= 2048 && h <= 2048 && body + 8 + px <= data.len() {
+                let raw = data[body + 8..body + 8 + px].to_vec();
+                let mut img = image::RgbaImage::from_raw(w, h, raw)?;
+                image::imageops::flip_vertical_in_place(&mut img); // blend stores bottom-up
+                let mut out = std::io::Cursor::new(Vec::new());
+                image::DynamicImage::ImageRgba8(img).write_to(&mut out, image::ImageFormat::Png).ok()?;
+                return Some(out.into_inner());
+            }
+            return None;
+        }
+        pos = body + size;
+    }
+    None
 }
 
 /// Clone helper so chunks can own their files for compute_record.
