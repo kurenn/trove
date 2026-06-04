@@ -4,6 +4,8 @@ All notable changes to Trove. This project uses [semantic versioning](https://se
 The section for each version becomes that version's GitHub release notes.
 
 ## [Unreleased]
+
+## [2.0.7]
 ### Added
 - Previews now come from embedded thumbnails too: `.3mf` slicer/project files (reliable) and `.blend` files (best-effort), cached locally — so 3mf/blend-only models show a real preview without rendering a mesh.
 
