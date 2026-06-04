@@ -111,6 +111,7 @@ export function DetailScreen({ model }: { model: Model }) {
                     filePath={partFile?.path}
                     fileExt={partFile?.type}
                     onDims={setRealDims}
+                    fallbackImage={poster}
                   />
                   <div className="viewer-hint">{HINTS[mode]}</div>
                   {parts.length > 1 && <div className="viewer-part-label"><Icon name="cube" size={13} /> {part.name}</div>}

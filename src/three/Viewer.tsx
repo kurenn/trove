@@ -109,6 +109,10 @@ interface Viewer3DProps {
   fileExt?: string;
   /** Reports the model's real bounding-box size (mm) once a mesh loads. */
   onDims?: (dims: { w: number; d: number; h: number } | null) => void;
+  /** Shown instead of the error overlay when the mesh can't be rendered — e.g. a
+      slicer-project .3mf (production extension) the loader can't parse falls back
+      to its embedded plate render. */
+  fallbackImage?: string;
 }
 
 interface ViewerState {
@@ -117,7 +121,7 @@ interface ViewerState {
   mode: ViewerMode; auto: boolean;
 }
 
-export function Viewer3D({ geometry, color, mode, autoRotate = true, filePath, fileExt, onDims }: Viewer3DProps) {
+export function Viewer3D({ geometry, color, mode, autoRotate = true, filePath, fileExt, onDims, fallbackImage }: Viewer3DProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<ViewerState>({
     rotY: -0.5, rotX: 0.12, dist: 4.4, dragging: false, px: 0, py: 0, mode, auto: autoRotate,
@@ -252,7 +256,10 @@ export function Viewer3D({ geometry, color, mode, autoRotate = true, filePath, f
   return (
     <div ref={mountRef} className="spool-viewer-canvas">
       {status === "loading" && <div className="viewer-loading"><Icon name="refresh" size={18} style={{ animation: "spin 1s linear infinite" }} /> loading mesh…</div>}
-      {status === "error" && <div className="viewer-error"><Icon name="cube" size={26} style={{ opacity: 0.4 }} /><span>Couldn't render a preview for this file.</span></div>}
+      {status === "error" && (fallbackImage
+        ? <div className="viewer-fallback"><img src={fallbackImage} alt="" draggable={false} /><span className="viewer-fallback-tag">preview image · 3D not available</span></div>
+        : <div className="viewer-error"><Icon name="cube" size={26} style={{ opacity: 0.4 }} /><span>Couldn't render a preview for this file.</span></div>
+      )}
     </div>
   );
 }
