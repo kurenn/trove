@@ -46,16 +46,22 @@ export function DetailScreen({ model }: { model: Model }) {
   useEffect(() => { setSel(stlIdx); setRealDims(null); setShow3D(false); setShowAllParts(false); }, [m.id]);
   const part = parts[sel] || parts[0];
   const partFile = part.files[0];
+  // Project/source files anywhere in this model's folder tree (Blender, 3MF, etc.).
+  const sourceFiles = m.files.filter((f) => SOURCE_TYPES.includes((f.type || "").toLowerCase()));
   // Cached local image used as the instant poster (downscaled render / rendered thumb).
   const liveThumb = useApp((s) => s.thumbs[m.id]);
   const poster = liveThumb ?? m.thumb;
+  // Whether the selected part is a loadable mesh, and whether to show the demo
+  // procedural shape. Procedural is ONLY for mock/browser data — a real on-disk
+  // model with no renderable mesh (e.g. a .blend) shows its cached image instead.
+  const renderable = !!partFile?.path;
+  const procedural = !isTauri && !renderable;
+  const blendOnly = !renderable && sourceFiles.some((f) => f.type === "blend");
   // Real bounds from the loaded mesh take priority over the demo volume estimate.
   const dims = realDims ?? modelDims(m);
   const dimVal = (n: number) => (n ? n : "—");
   const isFav = fav.includes(m.id);
   const sims = similar(m);
-  // Project/source files anywhere in this model's folder tree (Blender, 3MF, etc.).
-  const sourceFiles = m.files.filter((f) => SOURCE_TYPES.includes((f.type || "").toLowerCase()));
 
   const HINTS: Record<ViewerMode, string> = { rotate: "drag to rotate · scroll to zoom", measure: "bounding box dimensions" };
 
@@ -100,8 +106,8 @@ export function DetailScreen({ model }: { model: Model }) {
         <div>
           <div className="viewer-shell">
             <div className="viewer-stage">
-              {show3D || !partFile?.path ? (
-                // Real file → on user request; no path (mock/demo) → instant procedural.
+              {procedural || (show3D && renderable) ? (
+                // Mock/demo data (procedural shape) OR a real mesh on user request.
                 <>
                   <Viewer3D
                     geometry={part.geometry}
@@ -123,13 +129,16 @@ export function DetailScreen({ model }: { model: Model }) {
                   </div>
                 </>
               ) : (
-                // Instant poster (cached local image). The full mesh streams only
-                // when the user opts in — keeps opening a model fast on a NAS.
-                <button className="viewer-poster" onClick={() => partFile?.path && setShow3D(true)} disabled={!partFile?.path}>
+                // Real on-disk model: show the cached image instantly (never a
+                // misleading procedural shape). A loadable mesh gets "View in 3D";
+                // a .blend / non-mesh with no thumbnail shows a neutral tile.
+                <button className="viewer-poster" onClick={() => renderable && setShow3D(true)} disabled={!renderable}>
                   {poster
                     ? <img src={poster} alt={part.name} draggable={false} />
-                    : <span className="spool-thumb-ph-icon" style={{ color: part.color }}><Icon name="cube" size={48} /></span>}
-                  {partFile?.path && <span className="viewer-load-cta"><Icon name="cube" size={16} /> View in 3D</span>}
+                    : blendOnly
+                      ? <span className="viewer-typetile">BLEND</span>
+                      : <span className="spool-thumb-ph-icon" style={{ color: part.color }}><Icon name="cube" size={48} /></span>}
+                  {renderable && <span className="viewer-load-cta"><Icon name="cube" size={16} /> View in 3D</span>}
                 </button>
               )}
             </div>

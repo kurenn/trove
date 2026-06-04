@@ -391,6 +391,7 @@
 .viewer-fallback { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--surface-2); z-index: 2; }
 .viewer-fallback img { width: 100%; height: 100%; object-fit: contain; }
 .viewer-fallback-tag { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); font-family: var(--font-mono); font-size: 11px; color: #fff; background: color-mix(in srgb, var(--ink) 55%, transparent); padding: 4px 9px; border-radius: 7px; backdrop-filter: blur(6px); }
+.viewer-typetile { font-family: var(--font-mono); font-weight: 700; font-size: 22px; letter-spacing: .08em; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--line); padding: 18px 26px; border-radius: var(--r-md); }
 .spool-thumb.is-loading .spool-thumb-ph { animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { opacity: .5; } 50% { opacity: .9; } }
 
