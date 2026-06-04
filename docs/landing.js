@@ -32,7 +32,8 @@
     bell: "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0",
     lock: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4",
     star: "M12 3l2.6 6.3L21 9.8l-5 4.3 1.6 6.6L12 17l-5.6 3.7L8 14.1l-5-4.3 6.4-.5L12 3Z",
-    x: "M6 6l12 12M18 6 6 18"
+    x: "M6 6l12 12M18 6 6 18",
+    copy: "M9 9h10v10H9zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"
   };
 
   function svgIcon(name, stroke) {
@@ -256,6 +257,21 @@
     });
   }
 
+  // Generic "copy to clipboard" buttons (e.g. the macOS command). The text to
+  // copy is in the button's data-copy attribute; the icon briefly swaps to a check.
+  function setupCopyButtons() {
+    document.querySelectorAll("[data-copy]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var text = btn.getAttribute("data-copy");
+        if (navigator.clipboard) navigator.clipboard.writeText(text).catch(function () {});
+        var orig = btn.innerHTML;
+        btn.innerHTML = svgIcon("check");
+        btn.classList.add("copied");
+        setTimeout(function () { btn.innerHTML = orig; btn.classList.remove("copied"); }, 1500);
+      });
+    });
+  }
+
   /* ---------- init ---------- */
   document.addEventListener("DOMContentLoaded", function () {
     reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -269,6 +285,7 @@
     setupReveal();
     setupCounters();
     setupCopy();
+    setupCopyButtons();
     setupDownload();
     setupSpin();
     clock();

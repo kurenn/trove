@@ -79,6 +79,28 @@ img { max-width: 100%; display: block; }
 [data-icon] svg { width: 1.1em; height: 1.1em; display: block; }
 
 .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+
+/* copy-to-clipboard command row (macOS install note) */
+.cmd-copy {
+  display: inline-flex; align-items: center; gap: 8px;
+  max-width: 100%; margin: 8px auto 0;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border: 1px solid var(--line); border-radius: 10px; padding: 6px 6px 6px 12px;
+}
+.cmd-copy code {
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--ink, #2c241c);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cmd-copy-btn {
+  flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface, #fffdfa); color: var(--accent);
+  transition: background .14s, transform .08s;
+}
+.cmd-copy-btn:hover { background: var(--accent-soft); }
+.cmd-copy-btn:active { transform: translateY(1px); }
+.cmd-copy-btn.copied { color: #2e9e6b; }
+.cmd-copy-btn svg { width: 16px; height: 16px; display: block; }
 .eyebrow {
   font-family: var(--font-mono); font-size: 12px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .18em; color: var(--accent);
