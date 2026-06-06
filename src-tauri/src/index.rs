@@ -1302,7 +1302,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
     let mut stmt = conn.prepare(
         "SELECT id, name, creator, collection, geometry, color, license, source, source_url,
                 supports, added, file_count, total_size, thumb,
-                dim_w, dim_d, dim_h, preview FROM models ORDER BY added DESC",
+                dim_w, dim_d, dim_h, preview, folder FROM models ORDER BY added DESC",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok((
@@ -1313,13 +1313,13 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             r.get::<_, i64>(11)? as u32, r.get::<_, i64>(12)? as u64,
             r.get::<_, Option<String>>(13)?,
             r.get::<_, i64>(14)? as u32, r.get::<_, i64>(15)? as u32, r.get::<_, i64>(16)? as u32,
-            r.get::<_, Option<String>>(17)?,
+            r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?,
         ))
     })?;
 
     for row in rows {
         let (id, name, creator, collection, geometry, color, license, source, source_url,
-            supports, added, file_count, total_size, thumb, dim_w, dim_d, dim_h, preview) = row?;
+            supports, added, file_count, total_size, thumb, dim_w, dim_d, dim_h, preview, folder) = row?;
 
         let (file_types, parts_count) = agg.remove(&id).unwrap_or_default();
         let tags = tagmap.remove(&id).unwrap_or_default();
@@ -1329,7 +1329,11 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             files: Vec::new(),       // slim — hydrated on demand via get_model
             license, source, source_url, supports, added, liked: false,
             desc: String::new(),     // slim
-            folder: String::new(),   // slim
+            // Folder path is kept (one small string) so search can match a model
+            // by its descriptive folder name when the STL files + leaf folder are
+            // generic (e.g. "Batman Helmet/part1.stl"). The heavy files/parts/extras
+            // are still hydrated on demand.
+            folder,
             parts: Vec::new(),       // slim
             extras: Vec::new(),      // slim
             print_time: None, filament: None, makes: None, volume: None,
@@ -1826,14 +1830,42 @@ fn rebuild_fts(conn: &Connection) -> rusqlite::Result<()> {
          SELECT 'file', f.id, f.name FROM files f WHERE f.is_part = 1",
         [],
     )?;
-    // One row per model (folder name + tags).
+    // One row per model: name + folder path + tags. The folder path lets Quick
+    // Find match a model by a descriptive ancestor folder (e.g. "Batman Helmet")
+    // even when the model's own name + STL files are generic. Path separators and
+    // _/- become spaces so "batman helmet" matches a "Batman_Helmet" folder too.
     conn.execute(
         "INSERT INTO search_fts (kind, ref_id, text)
-         SELECT 'folder', m.id, m.name || ' ' || COALESCE((SELECT group_concat(t.tag,' ') FROM tags t WHERE t.model_id=m.id),'')
+         SELECT 'folder', m.id,
+                m.name || ' ' ||
+                REPLACE(REPLACE(REPLACE(m.folder, '/', ' '), '_', ' '), '-', ' ') || ' ' ||
+                COALESCE((SELECT group_concat(t.tag,' ') FROM tags t WHERE t.model_id=m.id),'')
          FROM models m",
         [],
     )?;
     Ok(())
+}
+
+/// Rebuild the FTS index once on startup when its indexed *content* has changed
+/// (tracked by `fts_version`), so existing installs pick up new matching — e.g.
+/// folder-path search — without the user having to manually reindex. Bump
+/// FTS_VERSION whenever `rebuild_fts`'s indexed text changes.
+pub fn migrate_fts_if_stale(conn: &Connection) {
+    const FTS_VERSION: i64 = 1;
+    let stored: i64 = conn
+        .query_row("SELECT value FROM settings WHERE key='fts_version'", [], |r| r.get::<_, String>(0))
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    if stored == FTS_VERSION {
+        return;
+    }
+    if rebuild_fts(conn).is_ok() {
+        let _ = conn.execute(
+            "INSERT INTO settings (key,value) VALUES ('fts_version',?1) ON CONFLICT(key) DO UPDATE SET value=?1",
+            params![FTS_VERSION.to_string()],
+        );
+    }
 }
 
 /// Escape a user query into a single FTS5 quoted string token (safe for trigram).
@@ -2194,6 +2226,9 @@ mod tests {
         touch(&root.join("Greeble Labs/Koi Flexi/koi_flexi.stl"), 64);
         touch(&root.join("Greeble Labs/Koi Flexi/koi_flexi.3mf"), 64);
         touch(&root.join("Forge/Bracket/wall_bracket.stl"), 64);
+        // Descriptive ancestor folder ("Batman Helmet") with a generic leaf folder
+        // + generic file — the model roots at "STLs"/"part1.stl".
+        touch(&root.join("Props/Batman Helmet/STLs/part1.stl"), 64);
 
         let mut conn = crate::db::open(&root.join("fts.db")).unwrap();
         conn.execute(
@@ -2220,6 +2255,13 @@ mod tests {
         let mut folders = Vec::new();
         collect_quick_folders(&conn, Some("%bracket%"), &mut folders).unwrap();
         assert!(folders.iter().any(|f| f.name.to_lowercase().contains("bracket")), "folders: {:?}", folders.iter().map(|f| &f.name).collect::<Vec<_>>());
+
+        // A descriptive ancestor folder ("Batman Helmet") is findable even though
+        // the model name + file are generic — the folder PATH is in the FTS row.
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH ?1", params![fts_query("batman")], |r| r.get(0))
+            .unwrap();
+        assert!(n >= 1, "expected 'batman' to match via the folder path, got {n}");
 
         let _ = fs::remove_dir_all(&root);
     }

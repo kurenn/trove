@@ -52,10 +52,13 @@ pub fn run() {
             app.manage(Db(Mutex::new(conn)));
             app.manage(index::ScanFlags::default());
 
-            // Clear any libraries left stuck in 'scanning' from a prior crash.
+            // Clear any libraries left stuck in 'scanning' from a prior crash, and
+            // upgrade the Quick Find index once if its content changed (folder-path
+            // search) so existing installs don't need a manual reindex.
             if let Some(db) = app.try_state::<Db>() {
                 if let Ok(conn) = db.0.lock() {
                     let _ = conn.execute("UPDATE libraries SET status='idle' WHERE status='scanning'", []);
+                    index::migrate_fts_if_stale(&conn);
                 }
             }
 

@@ -53,8 +53,14 @@ export function applyFilters(models: Model[], query: string, f: Filters): Model[
   let out = models.filter((m) => {
     if (q) {
       const cname = creatorById(m.creator)?.name ?? "";
-      const hay = (m.name + " " + m.tags.join(" ") + " " + cname).toLowerCase();
-      if (!hay.includes(q)) return false;
+      const coll = collectionById(m.collection)?.name ?? "";
+      // Include the folder path so a model is findable by a descriptive ancestor
+      // folder (e.g. "Batman Helmet") when its name/files are generic. Path
+      // separators and _/- become spaces so "batman helmet" matches "Batman_Helmet".
+      const folder = m.folder ? m.folder.replace(/[/_-]+/g, " ") : "";
+      const hay = (m.name + " " + m.tags.join(" ") + " " + cname + " " + coll + " " + folder).toLowerCase();
+      // Every query word must appear, in any order — "helmet batman" finds "Batman Helmet".
+      if (!q.split(/\s+/).every((w) => hay.includes(w))) return false;
     }
     if (f.tags.length && !f.tags.every((t) => m.tags.includes(t))) return false;
     // Slim grid models carry `fileTypes` (no full `files` array); mock carries files.
