@@ -19,6 +19,11 @@ async function boot() {
     isLauncher = new URLSearchParams(window.location.search).get("launcher") === "1";
   }
 
+  // The boot splash is for the main app only — drop it now in the transparent
+  // Quick Find launcher window. (The main window's splash is removed by App once
+  // the first dataset is ready.)
+  if (isLauncher) document.getElementById("boot")?.remove();
+
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>{isLauncher ? <Launcher /> : <App />}</React.StrictMode>
   );

@@ -1,7 +1,7 @@
 /* tauri.ts — thin bridge to the Rust backend. In a plain browser (dev/preview
    without Tauri) isTauri is false and callers fall back to mock data. */
 
-import type { Dataset, Library, ScanOptions, QuickResults } from "../data/types";
+import type { Dataset, Library, ScanOptions, QuickResults, Model } from "../data/types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -18,6 +18,8 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 export const api = {
   getDataset: () => invoke<Dataset>("get_dataset"),
+  /** Hydrate one model's heavy fields (files/parts/extras/folder/desc) on demand. */
+  getModel: (id: string) => invoke<Model | null>("get_model", { id }),
   /** Rename a creator (persisted; survives rescans). Returns the rebuilt dataset. */
   renameCreator: (id: string, name: string) => invoke<Dataset>("rename_creator", { id, name }),
   /** Create a user collection. Returns [newId, dataset]. */

@@ -5,7 +5,7 @@ import { Icon } from "../components/Icons";
 import { Thumb } from "../three/Viewer";
 import { Toolbar } from "../components/filters";
 import { ModelResults } from "../components/cards";
-import { useDataset, collectionById, applyFilters, nModels } from "../data/dataset";
+import { useDataset, collectionById, applyFilters, nModels, isReal } from "../data/dataset";
 import { DEFAULT_FILTERS } from "../data/types";
 import { useApp } from "../lib/store";
 import type { Collection, Filters, Model } from "../data/types";
@@ -23,7 +23,7 @@ function CollCover({ collection }: { collection: Collection }) {
   return (
     <div className="coll-cover">
       {ms.slice(0, 4).map((m) => (
-        <Thumb key={m.id} geometry={m.geometry} color={m.color} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
+        <Thumb key={m.id} geometry={m.geometry} color={m.color} modelId={m.id} real={isReal(m)} />
       ))}
     </div>
   );

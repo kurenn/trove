@@ -96,6 +96,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             index::get_dataset,
+            index::get_model,
             index::rename_creator,
             index::create_collection,
             index::rename_collection,

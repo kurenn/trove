@@ -26,6 +26,13 @@ export function similar(model: Model): Model[] {
     .map((x) => x.m);
 }
 
+// Slim grid models (from the real index) carry `real`/`partsCount`/`fileCount`
+// instead of the full parts/files arrays; mock models carry the arrays. These
+// resolve a card's facts from whichever is present.
+export const isReal = (m: Model) => m.real ?? !!m.parts[0]?.files[0]?.path;
+export const partCount = (m: Model) => m.partsCount ?? m.parts.length;
+export const fileCount = (m: Model) => m.fileCount ?? m.files.length;
+
 export function fmtSize(bytes: number): string {
   if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + " MB";
   if (bytes >= 1e3) return Math.round(bytes / 1e3) + " KB";
@@ -50,7 +57,9 @@ export function applyFilters(models: Model[], query: string, f: Filters): Model[
       if (!hay.includes(q)) return false;
     }
     if (f.tags.length && !f.tags.every((t) => m.tags.includes(t))) return false;
-    if (f.types.length && !f.types.some((t) => m.files.some((fl) => fl.type === t))) return false;
+    // Slim grid models carry `fileTypes` (no full `files` array); mock carries files.
+    const types = m.fileTypes ?? m.files.map((fl) => fl.type);
+    if (f.types.length && !f.types.some((t) => types.includes(t))) return false;
     if (f.licenses.length && !f.licenses.includes(m.license)) return false;
     if (f.supportFree && m.supports) return false;
     return true;

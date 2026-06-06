@@ -103,6 +103,25 @@ export default function App() {
     return () => { unlisteners.forEach((fn) => fn()); };
   }, []);
 
+  // Fade out the instant boot splash (index.html) once the first dataset is ready
+  // — instantly in the browser/mock, after the first index load under Tauri. A
+  // safety timeout guarantees we never strand the user behind it.
+  useEffect(() => {
+    const boot = document.getElementById("boot");
+    if (!boot) return;
+    let done = false;
+    const remove = () => {
+      if (done) return;
+      done = true;
+      boot.classList.add("is-hidden");
+      setTimeout(() => boot.remove(), 320);
+    };
+    if (useApp.getState().ready) { remove(); return; }
+    const unsub = useApp.subscribe((s) => { if (s.ready) remove(); });
+    const safety = setTimeout(remove, 15000);
+    return () => { unsub(); clearTimeout(safety); };
+  }, []);
+
   // scroll content to top on route change
   useEffect(() => { if (contentRef.current) contentRef.current.scrollTop = 0; }, [route]);
 

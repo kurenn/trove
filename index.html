@@ -4,6 +4,58 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Trove — your 3D print library</title>
+    <!-- Apply the saved theme + accent before first paint so the boot splash (and
+         the app) don't flash light→dark, and the splash spinner matches the accent. -->
+    <script>
+      try {
+        var t = JSON.parse(localStorage.getItem("trove.tweaks") || "{}");
+        if (t.dark) document.documentElement.dataset.theme = "dark";
+        if (t.accent) document.documentElement.style.setProperty("--boot-accent", t.accent);
+      } catch (e) { /* ignore */ }
+    </script>
+    <!-- Instant boot splash: inline so it paints the moment the window appears —
+         before the JS bundle parses, the Tauri API loads, or the dataset fetch
+         runs. App.tsx removes it once the first library load completes. Uses
+         system fonts only, so it never waits on the Google Fonts request below. -->
+    <style>
+      #boot {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+        background: #faf6f1; color: #2c241c;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        transition: opacity .28s ease;
+      }
+      html[data-theme="dark"] #boot { background: #16120f; color: #f3ebe1; }
+      #boot.is-hidden { opacity: 0; pointer-events: none; }
+      /* The logo gently "rises off the bed" while its gem facets draw in layer by
+         layer — a small nod to a print coming together. */
+      #boot .mark { animation: boot-bob 2.6s ease-in-out infinite; transform-origin: center; will-change: transform, filter; }
+      #boot .mark .square { fill: var(--boot-accent, #c2693d); }
+      #boot .mark .facets path {
+        stroke: rgba(255, 247, 240, .96); stroke-width: 2; fill: none;
+        stroke-linejoin: round; stroke-linecap: round;
+        stroke-dasharray: 60; animation: boot-draw 2.6s ease-in-out infinite;
+      }
+      #boot .title { font-size: 17px; font-weight: 700; letter-spacing: .4px; margin-top: 2px; }
+      #boot .sub {
+        font-size: 12.5px; opacity: .55; min-height: 16px;
+        font-variant-numeric: tabular-nums; transition: opacity .26s ease;
+      }
+      @keyframes boot-bob {
+        0%, 100% { transform: translateY(0) rotate(0deg); filter: drop-shadow(0 6px 10px rgba(0,0,0,.10)); }
+        50%      { transform: translateY(-7px) rotate(-1.5deg); filter: drop-shadow(0 14px 18px rgba(0,0,0,.16)); }
+      }
+      @keyframes boot-draw {
+        0%   { stroke-dashoffset: 60; opacity: .15; }
+        45%  { stroke-dashoffset: 0;  opacity: 1; }
+        80%  { stroke-dashoffset: 0;  opacity: 1; }
+        100% { stroke-dashoffset: 0;  opacity: 0; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot .mark { animation: none; }
+        #boot .mark .facets path { animation: none; stroke-dashoffset: 0; opacity: 1; }
+      }
+    </style>
     <!-- Preload fonts so big display text (e.g. the onboarding name field) renders
          with correct metrics on first paint instead of swapping after load. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -12,6 +64,44 @@
   </head>
   <body>
     <div id="root"></div>
+    <div id="boot">
+      <svg class="mark" width="56" height="56" viewBox="0 0 32 32" aria-hidden="true">
+        <rect class="square" x="1" y="1" width="30" height="30" rx="9" />
+        <g class="facets">
+          <path d="M16 6 L25 13.5 L16 26 L7 13.5 Z" />
+          <path d="M7 13.5 H25" />
+          <path d="M16 6 L12.5 13.5 L16 26" />
+          <path d="M16 6 L19.5 13.5 L16 26" />
+        </g>
+      </svg>
+      <div class="title">Trove</div>
+      <div class="sub" id="boot-sub">Warming up the hotend…</div>
+    </div>
+    <!-- Rotate a 3D-printing loading line. Self-terminates once App removes #boot. -->
+    <script>
+      (function () {
+        var lines = [
+          "Warming up the hotend…", "Leveling the bed…", "Slicing the first layer…",
+          "Priming the extruder…", "Homing the axes…", "Calibrating the flow…",
+          "Drying the filament…", "Banishing the stringing…", "Adding a brim for luck…",
+          "Counting your Benchies…", "Retracting to avoid blobs…", "Just one more layer…",
+          "Finding the Z-offset…", "Unclogging the nozzle…",
+        ];
+        var el = document.getElementById("boot-sub");
+        if (!el) return;
+        var i = Math.floor(Math.random() * lines.length);
+        el.textContent = lines[i];
+        var t = setInterval(function () {
+          if (!document.body.contains(el)) { clearInterval(t); return; }
+          el.style.opacity = "0";
+          setTimeout(function () {
+            i = (i + 1) % lines.length;
+            el.textContent = lines[i];
+            el.style.opacity = "";
+          }, 260);
+        }, 2200);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -85,6 +85,17 @@ export interface Model {
   dimW?: number;
   dimD?: number;
   dimH?: number;
+
+  // Slim grid-payload fields (real/scanned models). The grid dataset omits the
+  // heavy files/parts/extras/folder/desc; the detail view hydrates them on demand
+  // (store.hydrateModel → get_model). These keep the card + type-faceting working
+  // without the full files array.
+  /** Distinct file extensions in the model (for client-side type facets). */
+  fileTypes?: string[];
+  /** Number of printable parts (card badge), without shipping the parts array. */
+  partsCount?: number;
+  /** True for real on-disk models — show the cached thumbnail, not a mock shape. */
+  real?: boolean;
 }
 
 /* ── Quick Find launcher results (from the Rust quick_search command) ── */

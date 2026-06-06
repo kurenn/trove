@@ -8,7 +8,7 @@ import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, f
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
 import { isTauri, revealInManager, copyText } from "../lib/tauri";
-import type { Creator, Model } from "../data/types";
+import type { Creator, Model, ModelFile } from "../data/types";
 
 const UNKNOWN_CREATOR: Creator = { id: "", name: "Unknown", handle: "", models: 0, blurb: "", tone: "var(--ink-3)" };
 
@@ -27,7 +27,13 @@ export function DetailScreen({ model }: { model: Model }) {
   const toast = useApp((s) => s.toast);
   useDataset(); // re-render if the dataset swaps
 
-  const m = model;
+  // The grid ships slim models; pull the on-demand-hydrated full record (files,
+  // parts, folder, desc) and fetch it on open. Until it lands the poster + identity
+  // render instantly from the slim model; the heavy panels fill in when ready.
+  const full = useApp((s) => s.details[model.id]);
+  useEffect(() => { if (isTauri) useApp.getState().hydrateModel(model.id); }, [model.id]);
+  const m = full ?? model;
+  const hydrating = isTauri && !full;
   const creator = creatorById(m.creator) ?? UNKNOWN_CREATOR;
   const collection = collectionById(m.collection);
   const [mode, setMode] = useState<ViewerMode>("rotate");
@@ -38,12 +44,18 @@ export function DetailScreen({ model }: { model: Model }) {
   // so opening a model is instant. Resets to the poster on each new model.
   const [show3D, setShow3D] = useState(false);
   const [showAllParts, setShowAllParts] = useState(false);
-  const parts = m.parts;
+  // Before hydration the slim model has no parts — fall back to a single poster
+  // part (from the card-level geometry/color) so the viewer shows the cached image.
+  const parts = m.parts.length
+    ? m.parts
+    : [{ id: m.id + "-p0", name: m.name, geometry: m.geometry, color: m.color, files: [] as ModelFile[] }];
+  const partCount = m.partsCount ?? parts.length;
   // Default to an STL part if present — binary STLs load reliably; a .3mf (often
   // alphabetically first) can be slow/unparseable and would fall back to a shape.
   const stlIdx = Math.max(0, parts.findIndex((p) => (p.files[0]?.type || "").toLowerCase() === "stl"));
   const [sel, setSel] = useState(stlIdx);
-  useEffect(() => { setSel(stlIdx); setRealDims(null); setShow3D(false); setShowAllParts(false); }, [m.id]);
+  // Re-init selection on model change AND when hydration swaps in the real parts.
+  useEffect(() => { setSel(stlIdx); setRealDims(null); setShow3D(false); setShowAllParts(false); }, [m.id, full]);
   const part = parts[sel] || parts[0];
   const partFile = part.files[0];
   // Project/source files anywhere in this model's folder tree (Blender, 3MF, etc.).
@@ -192,11 +204,11 @@ export function DetailScreen({ model }: { model: Model }) {
               <div className="file-ico" style={{ background: "var(--surface-2)" }}><Icon name="folder" size={18} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 13 }}>Stored in your library</div>
-                <div className="file-sub" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.folder}</div>
+                <div className="file-sub" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.folder || (hydrating ? "Loading…" : "")}</div>
               </div>
             </div>
-            <button className="btn btn-primary" style={{ width: "100%", marginTop: 12 }} onClick={openFolder}><Icon name="folder" size={17} /> Open folder</button>
-            <button className="btn" style={{ width: "100%", marginTop: 10 }} onClick={copyPath}><Icon name="link" size={16} /> Copy path</button>
+            <button className="btn btn-primary" style={{ width: "100%", marginTop: 12 }} onClick={openFolder} disabled={hydrating}><Icon name="folder" size={17} /> Open folder</button>
+            <button className="btn" style={{ width: "100%", marginTop: 10 }} onClick={copyPath} disabled={hydrating}><Icon name="link" size={16} /> Copy path</button>
           </div>
 
           <div className="panel">
@@ -205,13 +217,15 @@ export function DetailScreen({ model }: { model: Model }) {
           </div>
 
           <div className="panel">
-            <div className="panel-h"><Icon name="cube" size={18} /> {parts.length > 1 ? "Parts" : "Part"} <span className="faint" style={{ fontWeight: 500, marginLeft: 4 }}>{parts.length}</span>
-              {parts.length > 1 && <span className="faint" style={{ fontWeight: 500, fontSize: 12.5, marginLeft: "auto" }}>tap to view</span>}
+            <div className="panel-h"><Icon name="cube" size={18} /> {partCount > 1 ? "Parts" : "Part"} <span className="faint" style={{ fontWeight: 500, marginLeft: 4 }}>{partCount}</span>
+              {partCount > 1 && !hydrating && <span className="faint" style={{ fontWeight: 500, fontSize: 12.5, marginLeft: "auto" }}>tap to view</span>}
             </div>
             <div className="part-list">
               {/* Cap the rows so a 100+ part model doesn't turn the page into an
                   endless scroll; the selected part is always kept visible. */}
-              {parts.slice(0, showAllParts ? parts.length : Math.max(PART_CAP, sel + 1)).map((p, i) =>
+              {hydrating ? (
+                <div className="file-sub" style={{ padding: "10px 2px" }}>Loading parts…</div>
+              ) : parts.slice(0, showAllParts ? parts.length : Math.max(PART_CAP, sel + 1)).map((p, i) =>
                 <button key={p.id} className={"part-row" + (i === sel ? " active" : "")} onClick={() => setSel(i)}>
                   <Thumb geometry={p.geometry} color={p.color} className="part-thumb" real={!!p.files[0]?.path} />
                   <div style={{ flex: 1, minWidth: 0 }}>
