@@ -1,6 +1,6 @@
 /* Library.tsx — home grid with faceted filters and active-filter pills. */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Icon } from "../components/Icons";
 import { FiltersPanel, Toolbar } from "../components/filters";
 import { ModelResults } from "../components/cards";
@@ -19,7 +19,9 @@ export function LibraryScreen() {
   const [view, setView] = useState<"grid" | "list">("grid");
   const [f, setF] = useState<Filters>(DEFAULT_FILTERS);
   const [showFilters, setShowFilters] = useState(true);
-  const results = applyFilters(S.MODELS, query, f);
+  // Memoized so an O(n) scan + sort over the whole library only re-runs when the
+  // dataset, query, or filters actually change — not on every unrelated re-render.
+  const results = useMemo(() => applyFilters(S.MODELS, query, f), [S.MODELS, query, f]);
   const onOpen = (m: Model) => nav({ name: "model", id: m.id });
 
   const activePills: [keyof Filters, string | boolean, string][] = [

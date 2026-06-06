@@ -3,6 +3,7 @@
    grid below a threshold so small libraries are byte-for-byte unchanged. */
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { columnsFor, computeWindow } from "./virtual";
 
 interface VirtualGridProps<T> {
   items: T[];
@@ -35,20 +36,25 @@ export function VirtualGrid<T>({ items, keyOf, render, minCol, gap, overscanRows
     const wrap = wrapRef.current;
     const scroller = scrollerRef.current;
     if (!wrap || !scroller || rowH <= 0) return;
-    const width = wrap.clientWidth;
-    const c = Math.max(1, Math.floor((width + gap) / (minCol + gap)));
+    const c = columnsFor(wrap.clientWidth, minCol, gap);
     if (c !== cols) setCols(c);
-    const rows = Math.ceil(items.length / c);
     const wrapTop = wrap.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
     const viewTop = scroller.scrollTop - wrapTop;
-    const startRow = Math.max(0, Math.floor(viewTop / rowH) - overscanRows);
-    const visRows = Math.ceil(scroller.clientHeight / rowH) + overscanRows * 2;
-    const start = startRow * c;
-    const end = Math.min(items.length, (startRow + visRows) * c);
-    setRange({ start, end, padTop: startRow * rowH });
+    const { start, end, padTop, rows } = computeWindow({
+      itemCount: items.length, cols: c, rowH, viewTop,
+      viewportH: scroller.clientHeight, overscanRows,
+    });
+    setRange({ start, end, padTop });
     // keep the wrapper tall enough to preserve scroll length
     wrap.style.height = rows * rowH + "px";
   };
+
+  // The scroll/resize listeners are bound once (below), so they'd otherwise close
+  // over the first render's `recompute` — where rowH is still 0 and every call
+  // early-returns, so scrolling never advanced the window. Keep a ref pointing at
+  // the latest closure so those listeners always see current rowH/cols/scroll.
+  const recomputeRef = useRef(recompute);
+  recomputeRef.current = recompute;
 
   // Locate the scroll container once.
   useEffect(() => {
@@ -56,9 +62,9 @@ export function VirtualGrid<T>({ items, keyOf, render, minCol, gap, overscanRows
     const scroller = scrollerRef.current;
     if (!scroller) return;
     let raf = 0;
-    const onScroll = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(recompute); };
+    const onScroll = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => recomputeRef.current()); };
     scroller.addEventListener("scroll", onScroll, { passive: true });
-    const ro = new ResizeObserver(() => recompute());
+    const ro = new ResizeObserver(() => recomputeRef.current());
     ro.observe(scroller);
     if (wrapRef.current) ro.observe(wrapRef.current);
     return () => { scroller.removeEventListener("scroll", onScroll); ro.disconnect(); cancelAnimationFrame(raf); };

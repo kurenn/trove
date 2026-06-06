@@ -2,7 +2,7 @@
    The dataset lives here so it can be swapped from mock → Rust index at runtime. */
 
 import { create } from "zustand";
-import type { Route, Dataset, Library } from "../data/types";
+import type { Route, Dataset, Library, Model } from "../data/types";
 import { MOCK_DATASET } from "../data/mock";
 import { isTauri, api, loadConvert } from "./tauri";
 
@@ -34,6 +34,14 @@ interface AppState {
   data: Dataset;
   libraries: Library[];
   loading: boolean;
+  /** True once the first dataset is available to show: immediately in the browser
+      (mock), and after the first Tauri index load completes. Drives the boot splash. */
+  ready: boolean;
+  /** Full per-model records (files/parts/folder/desc) hydrated on demand for the
+      detail view — kept out of the slim MODELS grid payload. Keyed by model id. */
+  details: Record<string, Model>;
+  /** Fetch + cache the heavy fields for one model (no-op in the browser/mock). */
+  hydrateModel: (id: string) => Promise<void>;
   /** Generated/cached render thumbnails keyed by model id. Kept separate from the
       MODELS array so a single thumbnail completion only re-renders its own card. */
   thumbs: Record<string, string>;
@@ -159,6 +167,9 @@ export const useApp = create<AppState>((set, get) => ({
   data: MOCK_DATASET,
   libraries: [],
   loading: false,
+  // Browser/mock data is ready instantly; under Tauri we wait for the first load.
+  ready: !isTauri,
+  details: {},
   thumbs: {},
   scan: null,
 
@@ -206,7 +217,8 @@ export const useApp = create<AppState>((set, get) => ({
     try {
       const [raw, libraries] = await Promise.all([api.getDataset(), api.listLibraries()]);
       const { data, seeded } = await resolveAssets(raw, get().thumbs);
-      set({ data, libraries, thumbs: seeded, fav: get().fav.filter((id) => data.MODELS.some((m) => m.id === id)) });
+      // Drop cached hydrations — a rescan may have changed a model's files/parts.
+      set({ data, libraries, thumbs: seeded, details: {}, fav: get().fav.filter((id) => data.MODELS.some((m) => m.id === id)) });
       // Kick a gentle, throttled background pass to render thumbnails for any
       // image-less models that still need one (off the main thread, ≤2 at a time).
       // Folder-image models are handled by the Rust scanner's downscale cache, so
@@ -215,7 +227,28 @@ export const useApp = create<AppState>((set, get) => ({
     } catch (e) {
       console.error("refresh failed", e);
     } finally {
-      set({ loading: false });
+      // `ready` flips true even on failure so the boot splash never traps the user.
+      set({ loading: false, ready: true });
+    }
+  },
+
+  hydrateModel: async (id) => {
+    // Mock/browser models are already full; only Tauri's slim grid needs hydration.
+    if (!isTauri || useApp.getState().details[id]) return;
+    try {
+      const full = await api.getModel(id);
+      if (!full) return;
+      // Resolve the cached image paths to asset URLs (same as resolveAssets) so the
+      // detail poster works; the file/folder paths stay raw (used via Tauri at click).
+      const conv = await loadConvert();
+      const ready: Model = {
+        ...full,
+        thumb: full.thumb ? conv(full.thumb) : undefined,
+        preview: full.preview ? conv(full.preview) : undefined,
+      };
+      set((s) => ({ details: { ...s.details, [id]: ready } }));
+    } catch (e) {
+      console.error("hydrateModel failed", id, e);
     }
   },
 

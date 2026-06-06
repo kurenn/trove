@@ -14,6 +14,7 @@ npm run dev                 # web UI on mock data → http://localhost:1420
 npm run tauri dev           # full desktop app against the real Rust index
 TROVE_DEV_MOUNT="/path" npm run tauri dev   # auto-mount a folder for testing
 cd src-tauri && cargo test  # indexer: grouping, incremental rescan, tagging
+npm test                    # frontend unit specs (vitest): filtering, slim-payload fallbacks, windowing math, store
 npx tsc --noEmit            # typecheck the frontend
 npm run tauri build         # bundle (.app/.dmg, .msi, .AppImage…) — ask before releasing
 ```
@@ -75,6 +76,10 @@ Data lives at `~/Library/Application Support/io.spoolr.trove/trove.db`; thumbnai
   demand; on load failure, fall back to the cached image (slicer `.3mf` can't render).
 
 **Verification**
+- Pure logic (filtering, slim-payload fallbacks, windowing math, store actions): **`npm test`**
+  (vitest, Node env — specs live next to source as `*.test.ts`). No jsdom/RTL, so component
+  rendering + scroll *wiring* are not unit-tested — verify those in the browser. Keep card/
+  filter/grid logic in pure helpers (`dataset.ts`, `virtual.ts`) so it stays testable.
 - Browser/mock UI: local headless Chrome (`--headless=new --enable-unsafe-swiftshader`)
   + DEV deep-links (`?onboarded=1&s=model&id=…`, `?dark=1`, `?scan=scanning|previews`).
   The cloud browser-harness CANNOT reach `localhost`.

@@ -1262,12 +1262,46 @@ fn set_name_override(conn: &Connection, kind: &str, id: &str, name: &str) -> rus
 }
 
 // ── dataset assembly ─────────────────────────────────────────────────────────
+/// Build the **slim** grid dataset: every model with only card-facing fields. The
+/// heavy `files`/`parts`/`extras`/`folder`/`desc` are left empty and hydrated on
+/// demand by `get_model`. Per-model file/tag scans are replaced by two batched
+/// GROUP BY queries, so this is O(queries)=~3 instead of the old 2×N (a big win on
+/// multi-thousand-model libraries — and a much smaller IPC payload to the webview).
 fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
     let mut models: Vec<Model> = Vec::new();
 
+    // Batched per-model file facts: distinct types (for client-side faceting) and
+    // the printable-part count (for the card badge) — one query for the whole table.
+    let mut agg: HashMap<String, (Vec<String>, u32)> = HashMap::new();
+    {
+        let mut astmt = conn.prepare(
+            "SELECT model_id, group_concat(DISTINCT type),
+                    SUM(CASE WHEN is_part THEN 1 ELSE 0 END)
+             FROM files GROUP BY model_id",
+        )?;
+        let arows = astmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, i64>(2)?))
+        })?;
+        for row in arows.flatten() {
+            let (mid, types, parts) = row;
+            let tv: Vec<String> = types.map(|s| s.split(',').map(|x| x.to_string()).collect()).unwrap_or_default();
+            agg.insert(mid, (tv, parts as u32));
+        }
+    }
+
+    // Batched tags for all models in one query.
+    let mut tagmap: HashMap<String, Vec<String>> = HashMap::new();
+    {
+        let mut tstmt = conn.prepare("SELECT model_id, tag FROM tags ORDER BY model_id, tag")?;
+        let trows = tstmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in trows.flatten() {
+            tagmap.entry(row.0).or_default().push(row.1);
+        }
+    }
+
     let mut stmt = conn.prepare(
         "SELECT id, name, creator, collection, geometry, color, license, source, source_url,
-                supports, added, descr, folder, file_count, total_size, thumb,
+                supports, added, file_count, total_size, thumb,
                 dim_w, dim_d, dim_h, preview FROM models ORDER BY added DESC",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -1275,81 +1309,35 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
             r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?,
             r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?,
-            r.get::<_, i64>(9)? != 0, r.get::<_, String>(10)?, r.get::<_, String>(11)?,
-            r.get::<_, String>(12)?, r.get::<_, i64>(13)? as u32, r.get::<_, i64>(14)? as u64,
-            r.get::<_, Option<String>>(15)?,
-            r.get::<_, i64>(16)? as u32, r.get::<_, i64>(17)? as u32, r.get::<_, i64>(18)? as u32,
-            r.get::<_, Option<String>>(19)?,
+            r.get::<_, i64>(9)? != 0, r.get::<_, String>(10)?,
+            r.get::<_, i64>(11)? as u32, r.get::<_, i64>(12)? as u64,
+            r.get::<_, Option<String>>(13)?,
+            r.get::<_, i64>(14)? as u32, r.get::<_, i64>(15)? as u32, r.get::<_, i64>(16)? as u32,
+            r.get::<_, Option<String>>(17)?,
         ))
     })?;
 
-    // Hoisted prepared statements — reused per model instead of re-preparing
-    // 2× per model (a big win when building a multi-thousand-model dataset).
-    let mut fstmt = conn.prepare(
-        "SELECT name, type, size, path, is_part, geometry, color FROM files WHERE model_id=?1",
-    )?;
-    let mut tstmt = conn.prepare("SELECT tag FROM tags WHERE model_id=?1 ORDER BY tag")?;
-
     for row in rows {
         let (id, name, creator, collection, geometry, color, license, source, source_url,
-            supports, added, desc, folder, file_count, total_size, thumb, dim_w, dim_d, dim_h, preview) = row?;
+            supports, added, file_count, total_size, thumb, dim_w, dim_d, dim_h, preview) = row?;
 
-        // files → parts / extras
-        let frows = fstmt.query_map(params![id], |r| {
-            Ok((
-                r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? as u64,
-                r.get::<_, String>(3)?, r.get::<_, i64>(4)? != 0,
-                r.get::<_, String>(5)?, r.get::<_, String>(6)?,
-            ))
-        })?;
-
-        let mut files: Vec<ModelFile> = Vec::new();
-        let mut parts: Vec<Part> = Vec::new();
-        let mut extras: Vec<ModelFile> = Vec::new();
-        let mut pidx = 0;
-        for fr in frows {
-            let (fname, ftype, size, path, is_part, fgeo, fcol) = fr?;
-            let mf = ModelFile { name: fname.clone(), ftype: ftype.clone(), size, path: Some(path) };
-            files.push(mf.clone());
-            if is_part {
-                parts.push(Part {
-                    id: format!("{}-p{}", id, pidx),
-                    name: stem_of(&fname),
-                    geometry: fgeo,
-                    color: fcol,
-                    files: vec![mf],
-                });
-                pidx += 1;
-            } else {
-                extras.push(mf);
-            }
-        }
-        if parts.is_empty() {
-            // safety: a model always has at least one part for the viewer
-            parts.push(Part {
-                id: format!("{}-p0", id),
-                name: name.clone(),
-                geometry: geometry.clone(),
-                color: color.clone(),
-                files: vec![],
-            });
-        }
-
-        // tags
-        let tags: Vec<String> = tstmt
-            .query_map(params![id], |r| r.get::<_, String>(0))?
-            .filter_map(|t| t.ok())
-            .collect();
+        let (file_types, parts_count) = agg.remove(&id).unwrap_or_default();
+        let tags = tagmap.remove(&id).unwrap_or_default();
 
         models.push(Model {
-            id, name, creator, collection, geometry, color, tags, files,
-            license, source, source_url, supports, added, liked: false, desc, folder,
-            parts, extras,
+            id, name, creator, collection, geometry, color, tags,
+            files: Vec::new(),       // slim — hydrated on demand via get_model
+            license, source, source_url, supports, added, liked: false,
+            desc: String::new(),     // slim
+            folder: String::new(),   // slim
+            parts: Vec::new(),       // slim
+            extras: Vec::new(),      // slim
             print_time: None, filament: None, makes: None, volume: None,
             file_count, total_size,
-            thumb, // raw cache path; frontend resolves to an asset URL
+            thumb,   // raw cache path; frontend resolves to an asset URL
             preview, // raw folder-image path; frontend resolves to an asset URL
             dim_w, dim_d, dim_h,
+            file_types, parts_count, real: true,
         });
     }
 
@@ -1482,6 +1470,90 @@ fn list_libs(conn: &Connection) -> rusqlite::Result<Vec<Library>> {
 pub fn get_dataset(db: State<Db>) -> Result<Dataset, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     build_dataset(&conn).map_err(|e| e.to_string())
+}
+
+/// Hydrate one model with the heavy fields the grid omits (full files, parts,
+/// extras, folder, desc) — fetched on demand when the detail view opens. Returns
+/// None if the id is gone (e.g. removed by a rescan between grid load and click).
+fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Model>> {
+    let mut mstmt = conn.prepare(
+        "SELECT id, name, creator, collection, geometry, color, license, source, source_url,
+                supports, added, descr, folder, file_count, total_size, thumb,
+                dim_w, dim_d, dim_h, preview FROM models WHERE id=?1",
+    )?;
+    let mut rows = mstmt.query_map(params![id], |r| {
+        Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?,
+            r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?,
+            r.get::<_, i64>(9)? != 0, r.get::<_, String>(10)?, r.get::<_, String>(11)?,
+            r.get::<_, String>(12)?, r.get::<_, i64>(13)? as u32, r.get::<_, i64>(14)? as u64,
+            r.get::<_, Option<String>>(15)?,
+            r.get::<_, i64>(16)? as u32, r.get::<_, i64>(17)? as u32, r.get::<_, i64>(18)? as u32,
+            r.get::<_, Option<String>>(19)?,
+        ))
+    })?;
+    let row = match rows.next() {
+        Some(r) => r?,
+        None => return Ok(None),
+    };
+    let (id, name, creator, collection, geometry, color, license, source, source_url,
+        supports, added, desc, folder, file_count, total_size, thumb, dim_w, dim_d, dim_h, preview) = row;
+
+    // files → parts / extras (the per-model scan, run for a single model here).
+    let mut fstmt = conn.prepare(
+        "SELECT name, type, size, path, is_part, geometry, color FROM files WHERE model_id=?1",
+    )?;
+    let frows = fstmt.query_map(params![id], |r| {
+        Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? as u64,
+            r.get::<_, String>(3)?, r.get::<_, i64>(4)? != 0,
+            r.get::<_, String>(5)?, r.get::<_, String>(6)?,
+        ))
+    })?;
+    let mut files: Vec<ModelFile> = Vec::new();
+    let mut parts: Vec<Part> = Vec::new();
+    let mut extras: Vec<ModelFile> = Vec::new();
+    let mut file_types: Vec<String> = Vec::new();
+    let mut pidx = 0;
+    for fr in frows {
+        let (fname, ftype, size, path, is_part, fgeo, fcol) = fr?;
+        if !file_types.contains(&ftype) { file_types.push(ftype.clone()); }
+        let mf = ModelFile { name: fname.clone(), ftype: ftype.clone(), size, path: Some(path) };
+        files.push(mf.clone());
+        if is_part {
+            parts.push(Part { id: format!("{}-p{}", id, pidx), name: stem_of(&fname), geometry: fgeo, color: fcol, files: vec![mf] });
+            pidx += 1;
+        } else {
+            extras.push(mf);
+        }
+    }
+    let parts_count = parts.iter().filter(|p| !p.files.is_empty()).count() as u32;
+    if parts.is_empty() {
+        // safety: a model always has at least one part for the viewer
+        parts.push(Part { id: format!("{}-p0", id), name: name.clone(), geometry: geometry.clone(), color: color.clone(), files: vec![] });
+    }
+
+    let tags: Vec<String> = conn
+        .prepare("SELECT tag FROM tags WHERE model_id=?1 ORDER BY tag")?
+        .query_map(params![id], |r| r.get::<_, String>(0))?
+        .filter_map(|t| t.ok())
+        .collect();
+
+    Ok(Some(Model {
+        id, name, creator, collection, geometry, color, tags, files,
+        license, source, source_url, supports, added, liked: false, desc, folder,
+        parts, extras,
+        print_time: None, filament: None, makes: None, volume: None,
+        file_count, total_size, thumb, preview, dim_w, dim_d, dim_h,
+        file_types, parts_count, real: true,
+    }))
+}
+
+#[tauri::command]
+pub fn get_model(db: State<Db>, id: String) -> Result<Option<Model>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    build_model_full(&conn, &id).map_err(|e| e.to_string())
 }
 
 /// Rename a creator (persisted as an override that survives rescans). Returns the
@@ -1994,19 +2066,31 @@ mod tests {
         assert!(ds.collections.iter().any(|c| c.id == "functional"), "collections: {:?}",
             ds.collections.iter().map(|c| &c.id).collect::<Vec<_>>());
 
-        // Dice Set → 2 printable parts + 1 extra, tagged multi-part
+        // Dice Set → 2 printable parts + 1 extra, tagged multi-part. The grid
+        // dataset is slim (parts/extras hydrated on demand), so the card-facing
+        // facts live in parts_count/file_types; the heavy detail comes from get_model.
         let dice = ds.models.iter().find(|m| m.name == "Dice Set").expect("Dice Set model");
-        assert_eq!(dice.parts.len(), 2, "dice parts");
-        assert_eq!(dice.extras.len(), 1, "dice extras (readme.txt)");
+        assert!(dice.parts.is_empty(), "slim grid dataset omits parts");
+        assert_eq!(dice.parts_count, 2, "dice parts_count");
+        assert!(dice.real, "real on-disk model");
+        assert!(dice.file_types.contains(&"stl".to_string()), "dice file_types: {:?}", dice.file_types);
         assert!(dice.tags.contains(&"multi-part".to_string()), "dice tags: {:?}", dice.tags);
         assert!(dice.tags.contains(&"stl".to_string()));
 
+        // Hydration: get_model fills the heavy fields (full parts + extras).
+        let dice_full = build_model_full(&conn, &dice.id).unwrap().expect("dice hydrates");
+        assert_eq!(dice_full.parts.len(), 2, "dice parts (hydrated)");
+        assert_eq!(dice_full.extras.len(), 1, "dice extras (readme.txt, hydrated)");
+
         // single-part model has 1 part, 0 extras, real file facts
         let fox = ds.models.iter().find(|m| m.name == "Low Poly Fox").expect("fox model");
-        assert_eq!(fox.parts.len(), 1);
+        assert_eq!(fox.parts_count, 1);
         assert_eq!(fox.file_count, 1);
         assert_eq!(fox.total_size, 2048);
         assert!(fox.print_time.is_none(), "real models carry no print time");
+        let fox_full = build_model_full(&conn, &fox.id).unwrap().expect("fox hydrates");
+        assert_eq!(fox_full.parts.len(), 1);
+        assert_eq!(fox_full.extras.len(), 0);
 
         let _ = fs::remove_dir_all(&root);
     }

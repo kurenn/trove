@@ -3,7 +3,7 @@
 import { Icon, Avatar } from "./Icons";
 import { Thumb } from "../three/Viewer";
 import { VirtualGrid } from "./VirtualGrid";
-import { creatorById, fmtSize } from "../data/dataset";
+import { creatorById, fmtSize, isReal, partCount, fileCount } from "../data/dataset";
 import type { Creator, Model } from "../data/types";
 
 // Above this many cards, switch the grid to windowed rendering.
@@ -45,15 +45,15 @@ export function ModelCard({ m, onOpen, fav, onFav }: CardProps) {
   return (
     <div className="model-card" onClick={() => onOpen(m)}>
       <div className="thumb-wrap">
-        <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
+        <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={isReal(m)} />
         <button className={"card-fav" + (fav ? " is-fav" : "")} onClick={(e) => { e.stopPropagation(); onFav(m.id); }}>
           <Icon name="heart" size={16} fill={fav ? "currentColor" : "none"} />
         </button>
         <div className="card-badges">
           {!m.supports && <span className="card-badge"><Icon name="check" size={12} /> support-free</span>}
-          {m.parts && m.parts.length > 1
-            ? <span className="card-badge"><Icon name="cube" size={12} /> {m.parts.length} parts</span>
-            : <span className="card-badge">{m.files.length} file{m.files.length > 1 ? "s" : ""}</span>}
+          {partCount(m) > 1
+            ? <span className="card-badge"><Icon name="cube" size={12} /> {partCount(m)} parts</span>
+            : <span className="card-badge">{fileCount(m)} file{fileCount(m) === 1 ? "" : "s"}</span>}
         </div>
       </div>
       <div className="card-body">
@@ -75,7 +75,7 @@ export function ListRow({ m, onOpen, fav, onFav }: CardProps) {
   const creator = creatorById(m.creator) ?? UNKNOWN_CREATOR;
   return (
     <div className="list-row" onClick={() => onOpen(m)}>
-      <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
+      <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={isReal(m)} />
       <div className="list-main">
         <div className="list-name">{m.name}</div>
         <div className="list-sub">{creator.name} · {m.tags.slice(0, 3).join(", ")}</div>
@@ -97,7 +97,7 @@ export function ListRow({ m, onOpen, fav, onFav }: CardProps) {
 export function MiniCard({ m, onOpen }: { m: Model; onOpen: (m: Model) => void }) {
   return (
     <div className="model-card" style={{ minWidth: 160 }} onClick={() => onOpen(m)}>
-      <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={!!m.parts[0]?.files[0]?.path} />
+      <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={isReal(m)} />
       <div className="card-body" style={{ padding: 11, gap: 4 }}>
         <div className="card-title" style={{ fontSize: 13.5 }}>{m.name}</div>
         <div className="faint" style={{ fontSize: 11.5 }}>{m.printTime} · {m.filament}g</div>
@@ -122,11 +122,26 @@ export function ModelResults({ models, view, onOpen, fav, onFav }: ResultsProps)
       <p style={{ fontSize: 13 }}>Try removing a filter or two.</p>
     </div>
   );
-  if (view === "list") return (
-    <div className="model-list">
-      {models.map((m) => <ListRow key={m.id} m={m} onOpen={onOpen} fav={fav.includes(m.id)} onFav={onFav} />)}
-    </div>
-  );
+  if (view === "list") {
+    if (models.length > VIRTUALIZE_THRESHOLD) {
+      // minCol huge → one column; matches .model-list gap (8px). Windowed so big
+      // libraries don't mount thousands of rows (each with a Thumb) at once.
+      return (
+        <VirtualGrid
+          items={models}
+          keyOf={(m) => m.id}
+          minCol={100000}
+          gap={8}
+          render={(m) => <ListRow m={m} onOpen={onOpen} fav={fav.includes(m.id)} onFav={onFav} />}
+        />
+      );
+    }
+    return (
+      <div className="model-list">
+        {models.map((m) => <ListRow key={m.id} m={m} onOpen={onOpen} fav={fav.includes(m.id)} onFav={onFav} />)}
+      </div>
+    );
+  }
   if (models.length > VIRTUALIZE_THRESHOLD) {
     // --grid-min 240 (comfy) / --gap 18 — windowed for large libraries.
     return (

@@ -82,6 +82,19 @@ pub struct Model {
     pub file_count: u32,
     #[serde(rename = "totalSize")]
     pub total_size: u64,
+    // ── Slim-payload fields ──────────────────────────────────────────────────
+    // The grid dataset (build_dataset) ships these light, card-only facts and
+    // leaves `files`/`parts`/`extras`/`folder`/`desc` empty; the detail view
+    // hydrates the heavy fields on demand via get_model. `file_types` keeps
+    // client-side type faceting working without the full files array.
+    #[serde(rename = "fileTypes", default)]
+    pub file_types: Vec<String>,
+    #[serde(rename = "partsCount", default)]
+    pub parts_count: u32,
+    /// True for real on-disk models (always, from the index) — lets the grid show
+    /// the cached thumbnail instead of a procedural mock shape without the parts array.
+    #[serde(default)]
+    pub real: bool,
     /** Cached thumbnail (asset path) once rendered. */
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumb: Option<String>,

@@ -1,6 +1,6 @@
 /* filters.tsx — FacetGroup, FiltersPanel, Toolbar. */
 
-import { useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
+import { useMemo, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { Icon } from "./Icons";
 import { useDataset } from "../data/dataset";
 import type { Filters, Model } from "../data/types";
@@ -25,7 +25,24 @@ interface FiltersPanelProps {
 
 export function FiltersPanel({ f, setF, models }: FiltersPanelProps) {
   const S = useDataset();
-  const count = (pred: (m: Model) => boolean) => models.filter(pred).length;
+  // One pass over the library to tally every facet, memoized on the dataset.
+  // Previously each `count()` re-scanned all models, ~26× per render (every
+  // keystroke / toggle) — O(facets × models). Now it's O(models), cached.
+  const counts = useMemo(() => {
+    const tags: Record<string, number> = {};
+    const types: Record<string, number> = {};
+    const licenses: Record<string, number> = {};
+    let supportFree = 0;
+    for (const m of models) {
+      if (!m.supports) supportFree++;
+      for (const t of m.tags) tags[t] = (tags[t] ?? 0) + 1;
+      // Slim grid models carry `fileTypes`; mock falls back to the full files array.
+      const ftypes = m.fileTypes ?? [...new Set(m.files.map((fl) => fl.type))];
+      for (const ft of ftypes) types[ft] = (types[ft] ?? 0) + 1;
+      if (m.license) licenses[m.license] = (licenses[m.license] ?? 0) + 1;
+    }
+    return { tags, types, licenses, supportFree };
+  }, [models]);
   const toggle = (key: "tags" | "types" | "licenses", val: string) =>
     setF((s) => ({ ...s, [key]: s[key].includes(val) ? s[key].filter((x) => x !== val) : [...s[key], val] }));
   return (
@@ -34,7 +51,7 @@ export function FiltersPanel({ f, setF, models }: FiltersPanelProps) {
         <label className="check">
           <input type="checkbox" checked={f.supportFree} onChange={() => setF((s) => ({ ...s, supportFree: !s.supportFree }))} />
           <span className="box"><Icon name="check" size={13} /></span>Support-free only
-          <span className="ct">{count((m) => !m.supports)}</span>
+          <span className="ct">{counts.supportFree}</span>
         </label>
       </FacetGroup>
       <FacetGroup title="Tags">
@@ -42,7 +59,7 @@ export function FiltersPanel({ f, setF, models }: FiltersPanelProps) {
           <label key={t} className="check">
             <input type="checkbox" checked={f.tags.includes(t)} onChange={() => toggle("tags", t)} />
             <span className="box"><Icon name="check" size={13} /></span>{t}
-            <span className="ct">{count((m) => m.tags.includes(t))}</span>
+            <span className="ct">{counts.tags[t] ?? 0}</span>
           </label>
         ))}
       </FacetGroup>
@@ -51,7 +68,7 @@ export function FiltersPanel({ f, setF, models }: FiltersPanelProps) {
           <label key={t} className="check">
             <input type="checkbox" checked={f.types.includes(t)} onChange={() => toggle("types", t)} />
             <span className="box"><Icon name="check" size={13} /></span><span className="spool-mono" style={{ textTransform: "uppercase" }}>{t}</span>
-            <span className="ct">{count((m) => m.files.some((fl) => fl.type === t))}</span>
+            <span className="ct">{counts.types[t] ?? 0}</span>
           </label>
         ))}
       </FacetGroup>
@@ -60,7 +77,7 @@ export function FiltersPanel({ f, setF, models }: FiltersPanelProps) {
           <label key={t} className="check">
             <input type="checkbox" checked={f.licenses.includes(t)} onChange={() => toggle("licenses", t)} />
             <span className="box"><Icon name="check" size={13} /></span>{t}
-            <span className="ct">{count((m) => m.license === t)}</span>
+            <span className="ct">{counts.licenses[t] ?? 0}</span>
           </label>
         ))}
       </FacetGroup>
