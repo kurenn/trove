@@ -40,6 +40,14 @@ describe("applyFilters — search", () => {
   it("matches on a tag", () => {
     expect(applyFilters(models, "desk", filters()).map((m) => m.id)).toEqual(["b"]);
   });
+  it("matches query words in any order", () => {
+    const m = [model({ id: "a", name: "Batman Helmet" })];
+    expect(applyFilters(m, "helmet batman", filters()).map((x) => x.id)).toEqual(["a"]);
+  });
+  it("requires every query word to be present", () => {
+    const m = [model({ id: "a", name: "Batman Helmet" })];
+    expect(applyFilters(m, "batman spaceship", filters())).toEqual([]);
+  });
   it("matches on the creator's display name", () => {
     expect(applyFilters(models, "studio voxel", filters()).map((m) => m.id).sort()).toEqual(["a", "b"]);
   });

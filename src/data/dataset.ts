@@ -59,7 +59,8 @@ export function applyFilters(models: Model[], query: string, f: Filters): Model[
       // separators and _/- become spaces so "batman helmet" matches "Batman_Helmet".
       const folder = m.folder ? m.folder.replace(/[/_-]+/g, " ") : "";
       const hay = (m.name + " " + m.tags.join(" ") + " " + cname + " " + coll + " " + folder).toLowerCase();
-      if (!hay.includes(q)) return false;
+      // Every query word must appear, in any order — "helmet batman" finds "Batman Helmet".
+      if (!q.split(/\s+/).every((w) => hay.includes(w))) return false;
     }
     if (f.tags.length && !f.tags.every((t) => m.tags.includes(t))) return false;
     // Slim grid models carry `fileTypes` (no full `files` array); mock carries files.
