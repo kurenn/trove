@@ -13,8 +13,9 @@ A self-hosted **desktop app** that indexes your STL / 3MF / STEP files **in plac
 [![License: MIT](https://img.shields.io/github/license/kurenn/trove?color=c2693d)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Windows%20·%20Linux-c2693d)
 ![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%20v2%20·%20Rust%20·%20React-c2693d)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-c2693d?logo=buymeacoffee&logoColor=white)](https://buymeacoffee.com/kurito)
 
-[**🌐 Website**](https://trove.spoolr.io) &nbsp;·&nbsp; [**⬇️ Download**](https://github.com/kurenn/trove/releases/latest) &nbsp;·&nbsp; [**🧭 Quick start**](#-quick-start)
+[**🌐 Website**](https://trove.spoolr.io) &nbsp;·&nbsp; [**⬇️ Download**](https://github.com/kurenn/trove/releases/latest) &nbsp;·&nbsp; [**🧭 Quick start**](#-quick-start) &nbsp;·&nbsp; [**☕ Support**](https://buymeacoffee.com/kurito)
 
 <br/>
 
@@ -132,6 +133,10 @@ ActivityPub federation and a public library page; the prototype's four visual "d
 ## 🤝 Contributing
 
 Issues and PRs are welcome. Building locally is just `npm install` + `npm run tauri dev`.
+
+## ☕ Support
+
+Trove is free and open source, with no accounts, cloud, or telemetry. If it earns a spot in your workflow and you'd like to support continued development, you can [**buy me a coffee**](https://buymeacoffee.com/kurito). Thank you!
 
 ## 📄 License
 

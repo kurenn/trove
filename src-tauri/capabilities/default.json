@@ -24,6 +24,10 @@
       ]
     },
     "opener:allow-reveal-item-in-dir",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://buymeacoffee.com/kurito" }]
+    },
     "dialog:default",
     "updater:default",
     "process:default",
