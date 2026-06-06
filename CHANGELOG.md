@@ -5,6 +5,19 @@ The section for each version becomes that version's GitHub release notes.
 
 ## [Unreleased]
 
+## [2.1.0]
+### Added
+- **Buy Me a Coffee** support link — in **Settings → Advanced** and on the project page.
+- An instant **boot splash** with an animated logo and rotating loading messages while your library loads, so launching no longer shows a blank window.
+
+### Changed
+- **Much faster on large libraries (3,000+ models).** The grid now loads a slim, card-only dataset and fetches a model's full details only when you open it, and the underlying database queries are batched — dramatically cutting first-load time and memory.
+
+### Fixed
+- **List view** now only renders what's on screen (it previously mounted every row, which could freeze big libraries).
+- The windowed grid/list now **keeps loading rows as you scroll** instead of stopping after the first screenful.
+- **Search and filter counts** no longer rescan the whole library on every keystroke.
+
 ## [2.0.9]
 ### Fixed
 - A real model with no renderable mesh (e.g. a Blender `.blend`) now shows its cached thumbnail (or a neutral BLEND tile) in the viewer instead of a misleading procedural placeholder shape.

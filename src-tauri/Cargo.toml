@@ -1,6 +1,6 @@
 [package]
 name = "trove"
-version = "2.0.9"
+version = "2.1.0"
 description = "Trove — self-hosted 3D print library"
 authors = ["Spoolr"]
 license = "MIT"
