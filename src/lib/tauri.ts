@@ -86,6 +86,15 @@ export async function openPath(path: string): Promise<boolean> {
   return true;
 }
 
+/** Open a URL in the user's default browser. Scope-gated — the target must be in
+    the opener capability's `allow-open-url` list. Returns false in a plain browser. */
+export async function openUrl(url: string): Promise<boolean> {
+  if (!isTauri) return false;
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
+  await openUrl(url);
+  return true;
+}
+
 /** Reveal a file/folder in the OS file manager (Finder/Explorer). */
 export async function revealInManager(path: string): Promise<boolean> {
   if (!isTauri) return false;

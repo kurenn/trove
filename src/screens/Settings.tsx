@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "../components/Icons";
 import { useApp } from "../lib/store";
-import { isTauri, api } from "../lib/tauri";
+import { isTauri, api, openUrl } from "../lib/tauri";
 import { ShortcutField } from "../components/ShortcutField";
 import { checkForUpdate } from "../lib/updater";
 
@@ -34,6 +34,13 @@ export function SettingsScreen() {
     if (!libs.length) { toast("No libraries to reindex"); return; }
     toast("Rebuilding index & thumbnails…");
     for (const l of libs) { try { await api.rescanLibraryForce(l.id); } catch { /* ignore */ } }
+  };
+
+  const support = async () => {
+    const url = "https://buymeacoffee.com/kurito";
+    // Native: open in the default browser (scope-gated). Browser/dev: new tab.
+    try { if (await openUrl(url)) return; } catch { /* fall through to web */ }
+    window.open(url, "_blank", "noopener");
   };
 
   const checkUpdates = async () => {
@@ -120,6 +127,7 @@ export function SettingsScreen() {
               <Row t="Reindex everything" d="Force a full rescan of every library — rebuilds the search index and regenerates all thumbnails. Use after editing files in place."><button className="btn btn-sm" onClick={reindexAll}><Icon name="refresh" size={15} /> Reindex</button></Row>
               <Row t="Replay first-run setup" d="Walk through the onboarding flow again."><button className="btn btn-sm" onClick={replayOnboarding}><Icon name="sparkles" size={15} /> Replay</button></Row>
               <Row t="Check for updates" d="Look for a newer signed release and install it in place."><button className="btn btn-sm" onClick={checkUpdates}><Icon name="download" size={15} /> Check now</button></Row>
+              <Row t="Support Trove" d="Trove is free & open source. If it earns a spot in your workflow, you can buy me a coffee."><button className="btn btn-sm" onClick={support}><Icon name="coffee" size={15} /> Buy me a coffee</button></Row>
               <Row t="Version" d="Trove · open source"><span className="spool-mono faint">{appVersion || "…"}</span></Row>
             </div>
           )}
