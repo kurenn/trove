@@ -14,6 +14,7 @@ The section for each version becomes that version's GitHub release notes.
 - **Much faster on large libraries (3,000+ models).** The grid now loads a slim, card-only dataset and fetches a model's full details only when you open it, and the underlying database queries are batched — dramatically cutting first-load time and memory.
 
 ### Fixed
+- **Search now finds models by their folder name.** A prop or helmet whose STL files (and innermost folder) are generically named is now findable by the descriptive folder that contains it — e.g. searching "Batman Helmet" matches `…/Batman Helmet/part1.stl`. Works in both the library search and Quick Find.
 - **List view** now only renders what's on screen (it previously mounted every row, which could freeze big libraries).
 - The windowed grid/list now **keeps loading rows as you scroll** instead of stopping after the first screenful.
 - **Search and filter counts** no longer rescan the whole library on every keystroke.

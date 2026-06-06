@@ -14,10 +14,14 @@ function model(over: Partial<Model> = {}): Model {
 }
 const filters = (over: Partial<Filters> = {}): Filters => ({ ...DEFAULT_FILTERS, ...over });
 
-// applyFilters resolves the creator *name* for search via the store; seed it.
+// applyFilters resolves the creator/collection *names* for search via the store; seed them.
 beforeEach(() => {
   useApp.setState({
-    data: { ...useApp.getState().data, CREATORS: [{ id: "voxel", name: "Studio Voxel", handle: "@voxel", models: 0, blurb: "", tone: "#000" }] },
+    data: {
+      ...useApp.getState().data,
+      CREATORS: [{ id: "voxel", name: "Studio Voxel", handle: "@voxel", models: 0, blurb: "", tone: "#000" }],
+      COLLECTIONS: [{ id: "helmets", name: "Helmets", blurb: "", cover: "cube", tone: "#000", count: 0 }],
+    },
   });
 });
 
@@ -38,6 +42,29 @@ describe("applyFilters — search", () => {
   });
   it("matches on the creator's display name", () => {
     expect(applyFilters(models, "studio voxel", filters()).map((m) => m.id).sort()).toEqual(["a", "b"]);
+  });
+});
+
+describe("applyFilters — finds models by descriptive folder name", () => {
+  it("matches an ancestor folder when the model name + files are generic", () => {
+    const models = [
+      model({ id: "a", name: "Stls", folder: "/lib/Marvel/Batman Helmet/STLs" }),
+      model({ id: "b", name: "Parts", folder: "/lib/Marvel/Iron Man/parts" }),
+    ];
+    expect(applyFilters(models, "batman helmet", filters()).map((m) => m.id)).toEqual(["a"]);
+  });
+
+  it("treats _ and - in folder names as spaces", () => {
+    const models = [model({ id: "a", name: "v2", folder: "/lib/props/Red_Hood-Helmet/v2" })];
+    expect(applyFilters(models, "red hood helmet", filters()).map((m) => m.id)).toEqual(["a"]);
+  });
+
+  it("matches by collection name", () => {
+    const models = [
+      model({ id: "a", name: "generic", collection: "helmets" }),
+      model({ id: "b", name: "other", collection: "" }),
+    ];
+    expect(applyFilters(models, "helmets", filters()).map((m) => m.id)).toEqual(["a"]);
   });
 });
 
