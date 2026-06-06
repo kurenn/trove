@@ -1830,12 +1830,16 @@ fn rebuild_fts(conn: &Connection) -> rusqlite::Result<()> {
          SELECT 'file', f.id, f.name FROM files f WHERE f.is_part = 1",
         [],
     )?;
-    // One row per model: name + full folder path + tags. The folder path lets
-    // Quick Find match a model by a descriptive ancestor folder (e.g. "Batman
-    // Helmet") even when the model's own name + STL files are generic.
+    // One row per model: name + folder path + tags. The folder path lets Quick
+    // Find match a model by a descriptive ancestor folder (e.g. "Batman Helmet")
+    // even when the model's own name + STL files are generic. Path separators and
+    // _/- become spaces so "batman helmet" matches a "Batman_Helmet" folder too.
     conn.execute(
         "INSERT INTO search_fts (kind, ref_id, text)
-         SELECT 'folder', m.id, m.name || ' ' || m.folder || ' ' || COALESCE((SELECT group_concat(t.tag,' ') FROM tags t WHERE t.model_id=m.id),'')
+         SELECT 'folder', m.id,
+                m.name || ' ' ||
+                REPLACE(REPLACE(REPLACE(m.folder, '/', ' '), '_', ' '), '-', ' ') || ' ' ||
+                COALESCE((SELECT group_concat(t.tag,' ') FROM tags t WHERE t.model_id=m.id),'')
          FROM models m",
         [],
     )?;
