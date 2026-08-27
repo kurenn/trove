@@ -51,6 +51,22 @@ describe("applyFilters — search", () => {
   it("matches on the creator's display name", () => {
     expect(applyFilters(models, "studio voxel", filters()).map((m) => m.id).sort()).toEqual(["a", "b"]);
   });
+
+  it("matches a file name (mock/full-`files` datasets)", () => {
+    const m = [model({ id: "a", name: "Generic Prop", files: [{ name: "visor.stl", type: "stl", size: 1 }] })];
+    expect(applyFilters(m, "visor", filters()).map((x) => x.id)).toEqual(["a"]);
+  });
+
+  it("matches file-name words in any order alongside the name", () => {
+    const m = [model({ id: "a", name: "Prop", files: [{ name: "battle_visor.blend", type: "blend", size: 1 }] })];
+    expect(applyFilters(m, "visor prop", filters()).map((x) => x.id)).toEqual(["a"]);
+  });
+
+  it("a slim model with no `files` array does not crash and finds nothing by filename", () => {
+    const m = [model({ id: "a", name: "Generic Prop", files: undefined as unknown as [] })];
+    expect(() => applyFilters(m, "visor", filters())).not.toThrow();
+    expect(applyFilters(m, "visor", filters())).toEqual([]);
+  });
 });
 
 describe("applyFilters — finds models by descriptive folder name", () => {
@@ -64,6 +80,11 @@ describe("applyFilters — finds models by descriptive folder name", () => {
 
   it("treats _ and - in folder names as spaces", () => {
     const models = [model({ id: "a", name: "v2", folder: "/lib/props/Red_Hood-Helmet/v2" })];
+    expect(applyFilters(models, "red hood helmet", filters()).map((m) => m.id)).toEqual(["a"]);
+  });
+
+  it("matches a Windows (backslash) folder path the same way", () => {
+    const models = [model({ id: "a", name: "v2", folder: "C:\\lib\\props\\Red_Hood-Helmet\\v2" })];
     expect(applyFilters(models, "red hood helmet", filters()).map((m) => m.id)).toEqual(["a"]);
   });
 

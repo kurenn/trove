@@ -56,9 +56,16 @@ export function applyFilters(models: Model[], query: string, f: Filters): Model[
       const coll = collectionById(m.collection)?.name ?? "";
       // Include the folder path so a model is findable by a descriptive ancestor
       // folder (e.g. "Batman Helmet") when its name/files are generic. Path
-      // separators and _/- become spaces so "batman helmet" matches "Batman_Helmet".
-      const folder = m.folder ? m.folder.replace(/[/_-]+/g, " ") : "";
-      const hay = (m.name + " " + m.tags.join(" ") + " " + cname + " " + coll + " " + folder).toLowerCase();
+      // separators (/ and Windows \) and _/- become spaces so "batman helmet"
+      // matches "Batman_Helmet".
+      const folder = m.folder ? m.folder.replace(/[\\/_-]+/g, " ") : "";
+      // File names: only present when the full `files` array is populated — mock
+      // data, or a hydrated detail-view model. The real app's grid dataset is slim
+      // (files: [] — see Model["fileTypes"] in types.ts) and doesn't carry names,
+      // only extensions, so this is a harmless no-op there until the backend adds
+      // a compact per-model filename field.
+      const names = (m.files ?? []).map((fl) => fl.name).join(" ");
+      const hay = (m.name + " " + m.tags.join(" ") + " " + cname + " " + coll + " " + folder + " " + names).toLowerCase();
       // Every query word must appear, in any order — "helmet batman" finds "Batman Helmet".
       if (!q.split(/\s+/).every((w) => hay.includes(w))) return false;
     }
