@@ -48,17 +48,45 @@ export function fmtDate(iso: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+// `m.folder` is the model's ABSOLUTE path on disk (Rust sets it from the walked
+// directory). Searching that raw means every model also matches every word in
+// its library's mount path (e.g. a library at "~/Dropbox/3D Prints" makes
+// "dropbox"/"prints" match everything). Strip the owning library's root — found
+// by the longest registered library `path` that prefixes the folder — so only
+// the model's OWN path under that root is searchable. No match (mock data, or a
+// folder that isn't under any known library) falls back to the raw folder,
+// same as before stripping existed.
+function stripLibraryRoot(folder: string, libraries: { path: string }[]): string {
+  let best = "";
+  for (const l of libraries) {
+    const root = l.path.replace(/[\\/]+$/, ""); // tolerate a trailing separator
+    if (!root) continue;
+    if ((folder === root || folder.startsWith(root + "/") || folder.startsWith(root + "\\")) && root.length > best.length) {
+      best = root;
+    }
+  }
+  return best ? folder.slice(best.length) : folder;
+}
+
 export function applyFilters(models: Model[], query: string, f: Filters): Model[] {
   const q = (query || "").trim().toLowerCase();
+  const libraries = useApp.getState().libraries;
   let out = models.filter((m) => {
     if (q) {
       const cname = creatorById(m.creator)?.name ?? "";
       const coll = collectionById(m.collection)?.name ?? "";
       // Include the folder path so a model is findable by a descriptive ancestor
       // folder (e.g. "Batman Helmet") when its name/files are generic. Path
-      // separators and _/- become spaces so "batman helmet" matches "Batman_Helmet".
-      const folder = m.folder ? m.folder.replace(/[/_-]+/g, " ") : "";
-      const hay = (m.name + " " + m.tags.join(" ") + " " + cname + " " + coll + " " + folder).toLowerCase();
+      // separators (/ and Windows \) and _/- become spaces so "batman helmet"
+      // matches "Batman_Helmet".
+      const folder = m.folder ? stripLibraryRoot(m.folder, libraries).replace(/[\\/_-]+/g, " ") : "";
+      // File names: only present when the full `files` array is populated — mock
+      // data, or a hydrated detail-view model. The real app's grid dataset is slim
+      // (files: [] — see Model["fileTypes"] in types.ts) and doesn't carry names,
+      // only extensions, so this is a harmless no-op there until the backend adds
+      // a compact per-model filename field.
+      const names = (m.files ?? []).map((fl) => fl.name).join(" ");
+      const hay = (m.name + " " + m.tags.join(" ") + " " + cname + " " + coll + " " + folder + " " + names).toLowerCase();
       // Every query word must appear, in any order — "helmet batman" finds "Batman Helmet".
       if (!q.split(/\s+/).every((w) => hay.includes(w))) return false;
     }
