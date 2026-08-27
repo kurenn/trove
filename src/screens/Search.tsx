@@ -11,6 +11,7 @@ import type { Filters, Model, Route } from "../data/types";
 
 export function SearchScreen({ route }: { route: Extract<Route, { name: "search" }> }) {
   const query = useApp((s) => s.query);
+  const searchIds = useApp((s) => s.searchIds);
   const setQuery = useApp((s) => s.setQuery);
   const fav = useApp((s) => s.fav);
   const onFav = useApp((s) => s.toggleFav);
@@ -28,7 +29,7 @@ export function SearchScreen({ route }: { route: Extract<Route, { name: "search"
   const [view, setView] = useState<"grid" | "list">("grid");
   useEffect(() => { setF(seed); if (route.saved) setQuery(route.saved.q || ""); }, [seed]);
 
-  const results = applyFilters(S.MODELS, query, f);
+  const results = applyFilters(S.MODELS, query, f, searchIds);
   const onOpen = (m: Model) => nav({ name: "model", id: m.id });
   const suggestions = ["support-free", "articulated", "vase-mode", "functional", "low-poly"];
 

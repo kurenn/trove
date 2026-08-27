@@ -17,6 +17,13 @@ interface AppState {
   phase: Phase;
   route: Route;
   query: string;
+  /** Model ids matching `query`, ranked best-first, from the backend FTS search
+      (search_model_ids) — populated (debounced) under Tauri while `query` is
+      non-empty, else null. `applyFilters` restricts to this set instead of its
+      client-side substring search when set, which is the only way real (slim)
+      data can be found by filename. Null in the browser/mock (isTauri false) —
+      applyFilters' existing substring path is unaffected there. */
+  searchIds: string[] | null;
   fav: string[];
   sidebarOpen: boolean;
   searchOpen: boolean;
@@ -103,6 +110,15 @@ export interface ScanLive {
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
+// Debounce state for the backend FTS search (searchIds) triggered from setQuery.
+// A monotonic token — not just clearing the timer — is what protects against a
+// SLOW response landing after a newer, faster one: e.g. "bat"'s request is still
+// in flight when the user types "batman", whose (faster) response should win;
+// without the token check, "bat"'s response arriving later would clobber it.
+let searchDebounce: ReturnType<typeof setTimeout> | undefined;
+let searchToken = 0;
+const SEARCH_DEBOUNCE_MS = 200;
+
 /** Resolve a dataset's cached thumbnail + folder-image paths to asset URLs and
     seed the per-id thumb map (preserving runtime-generated renders). Shared by
     refresh and the mutating commands so all paths produce display-ready data. */
@@ -155,6 +171,7 @@ export const useApp = create<AppState>((set, get) => ({
   phase: import.meta.env.VITE_FORCE_ONBOARDING === "1" || load(ONBOARDED_KEY) !== "1" ? "setup" : "app",
   route: { name: "library" },
   query: "",
+  searchIds: null,
   fav: MOCK_DATASET.MODELS.filter((m) => m.liked).map((m) => m.id),
   sidebarOpen: false,
   searchOpen: false,
@@ -175,7 +192,35 @@ export const useApp = create<AppState>((set, get) => ({
 
   setPhase: (phase) => set({ phase }),
   nav: (route) => set({ route, sidebarOpen: false }),
-  setQuery: (query) => set({ query }),
+  setQuery: (query) => {
+    set({ query });
+    clearTimeout(searchDebounce);
+    // No backend search below the trigram FTS's 3-char floor (see Rust
+    // search_model_ids's doc comment — it can't represent a shorter substring
+    // at all and would just come back with an EMPTY array, which — unlike
+    // null — applyFilters reads as "zero models match", wiping the grid for
+    // a 1-2 char query instead of falling back to substring matching), the
+    // browser/mock path, or an empty query (including a clear). All three
+    // resolve synchronously to null so the grid never shows leftover results
+    // and applyFilters' client-side substring path (still covers name/tags/
+    // folder, just not filenames) takes over.
+    if (!isTauri || query.trim().length < 3) {
+      set({ searchIds: null });
+      return;
+    }
+    const token = ++searchToken;
+    searchDebounce = setTimeout(() => {
+      api.searchModelIds(query).then((ids) => {
+        // Ignore a response that's no longer the latest request — protects
+        // against a slow response for an earlier keystroke landing after a
+        // faster one for a later keystroke and clobbering its results.
+        if (token === searchToken) set({ searchIds: ids });
+      }).catch((e) => {
+        console.error("searchModelIds failed", e);
+        if (token === searchToken) set({ searchIds: null });
+      });
+    }, SEARCH_DEBOUNCE_MS);
+  },
   toggleFav: (id) =>
     set((s) => ({ fav: s.fav.includes(id) ? s.fav.filter((x) => x !== id) : [...s.fav, id] })),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
