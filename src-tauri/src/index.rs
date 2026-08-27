@@ -157,6 +157,29 @@ fn prettify(s: &str) -> String {
     }
 }
 
+/// Generic, non-descriptive folder names creators commonly use to bucket a
+/// model's own files by export format or pipeline stage (`Batman Helmet/STLs/`,
+/// `Dungeon Wall Set/Tiles/`, `Prop/3MF/`, `Figure/Source/`…). None of these
+/// identify the model itself. List = the mesh/CAD file-format words a
+/// "one folder per format" export produces (stl/obj/3mf/step/mesh) plus the
+/// generic organizational nouns used for a folder that just holds model files
+/// (file/part/print/printable/model/source/output), each singular and plural.
+/// Matched case-insensitively, and after the same `_`/`-` → space normalization
+/// `prettify` uses, so `STLs`, `st_ls`-style spacing variants, etc. all match.
+const GENERIC_SEGMENTS: &[&str] = &[
+    "stl", "stls", "obj", "objs", "3mf", "3mfs", "step", "stp", "mesh", "meshes",
+    "file", "files", "part", "parts", "print", "prints", "printable", "printables",
+    "model", "models", "source", "sources", "output", "outputs",
+];
+
+/// Is this a generic bucket folder name (see `GENERIC_SEGMENTS`), not a
+/// meaningful name on its own?
+fn is_generic_segment(s: &str) -> bool {
+    let norm = s.replace(['_', '-'], " ");
+    let norm: String = norm.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    GENERIC_SEGMENTS.contains(&norm.as_str())
+}
+
 fn ext_of(name: &str) -> String {
     let e = Path::new(name)
         .extension()
@@ -503,11 +526,26 @@ fn compute_record(root: &Path, dir: &Path, mtime: i64, files: Vec<ScannedFile>) 
         .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string()))
         .collect();
 
-    let (creator_name, collection_name, model_name) = match segs.len() {
+    // Walk up past trailing generic "bucket" segments (Batman Helmet/STLs/,
+    // Dungeon Wall Set/Tiles/…) so the model's DISPLAY NAME comes from a
+    // meaningful ancestor instead of a format/export-stage folder. This only
+    // reshapes which segment plays which naming role below — `folder`/`id`
+    // (grouping/identity) is derived from `dir` unchanged, further down. `named`
+    // never shrinks below 1 element, so this can't walk past the creator segment
+    // and can't produce an empty name; because creator/collection/model are all
+    // re-derived from this SAME shrunk list (not just the model name in
+    // isolation), a consumed segment naturally takes over the next role down
+    // instead of being duplicated as both e.g. the collection and the model name.
+    let mut named: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+    while named.len() > 1 && is_generic_segment(named[named.len() - 1]) {
+        named.pop();
+    }
+
+    let (creator_name, collection_name, model_name) = match named.len() {
         0 => ("Uncategorized".to_string(), String::new(), prettify(&file_name(root))),
-        1 => ("Uncategorized".to_string(), String::new(), prettify(&segs[0])),
-        2 => (prettify(&segs[0]), String::new(), prettify(&segs[1])),
-        _ => (prettify(&segs[0]), prettify(&segs[1]), prettify(&segs[segs.len() - 1])),
+        1 => ("Uncategorized".to_string(), String::new(), prettify(named[0])),
+        2 => (prettify(named[0]), String::new(), prettify(named[1])),
+        _ => (prettify(named[0]), prettify(named[1]), prettify(named[named.len() - 1])),
     };
 
     let folder = dir.to_string_lossy().to_string();
@@ -662,8 +700,10 @@ fn scan_stream(
 const WALK_THREADS: usize = 16;
 
 /// Bump when the scan/grouping logic changes so installed libraries rebuild once
-/// on the next scan (v2 = subtree model grouping).
-const SCAN_VERSION: i64 = 2;
+/// on the next scan (v2 = subtree model grouping; v3 = model display names walk
+/// up past a generic bucket leaf segment like `STLs`/`Tiles`, see
+/// `GENERIC_SEGMENTS`/`is_generic_segment`).
+const SCAN_VERSION: i64 = 3;
 
 /// A message from a walker thread to the DB writer.
 /// (Retained for the `bench_walk` benchmark; the live scan uses `collect_tree`.)
@@ -2278,6 +2318,56 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn generic_leaf_folder_names_after_meaningful_ancestor() {
+        let root = std::env::temp_dir().join(format!("trove_genname_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        // Creator/Model/<generic export bucket> — the model's own files sit one
+        // level below the meaningful name. Must be named "Batman Helmet", not
+        // the bucket folder "STLs".
+        touch(&root.join("Forge/Batman Helmet/STLs/part1.stl"), 64);
+        // A normal Creator/Model tree (no generic leaf) is unaffected.
+        touch(&root.join("Forge/Low Poly Fox/fox.stl"), 64);
+        // Every segment down to the walk-up floor is generic — still must yield
+        // a sane, non-empty name (the best available: the shallowest kept dir).
+        touch(&root.join("Files/Parts/model.stl"), 64);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+
+        let (models, _files) = persist_scan(&mut conn, "lib", &root).unwrap();
+        // Grouping/model identity is untouched by the naming fix: still 3 model
+        // folders (STLs/model/Files+Parts don't merge or split differently).
+        assert_eq!(models, 3, "model count must be unchanged by the display-name fix");
+
+        let ds = build_dataset(&conn).unwrap();
+        let names: Vec<&str> = ds.models.iter().map(|m| m.name.as_str()).collect();
+
+        let batman = ds.models.iter().find(|m| m.name == "Batman Helmet")
+            .unwrap_or_else(|| panic!("expected a model named 'Batman Helmet', got {names:?}"));
+        assert!(!names.iter().any(|n| n.eq_ignore_ascii_case("stls")), "generic leaf must not be the model name, got {names:?}");
+        // Consuming the generic leaf shifts the hierarchy down a level: "Forge"
+        // stays the creator, and the collection tier collapses to none (it would
+        // otherwise duplicate "Batman Helmet" as both the collection AND the
+        // model name).
+        assert_eq!(batman.creator, "forge", "creator should still be Forge");
+        assert_eq!(batman.collection, "", "collection tier collapses rather than duplicating the model name");
+
+        // A normal Creator/Model tree (nothing generic) is unaffected.
+        assert!(names.contains(&"Low Poly Fox"), "got {names:?}");
+
+        // All-generic path: every ancestor is a bucket word, so there's nothing
+        // meaningful to walk up to — still a sane, non-empty name.
+        assert!(names.iter().all(|n| !n.is_empty()), "no model may end up with an empty name, got {names:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     // Gated benchmark: set TROVE_BENCH_DIR to a real folder to compare the serial
     // vs parallel walkers. Skips in normal `cargo test`.
     //   TROVE_BENCH_DIR="/path/to/your/model/library" cargo test bench_walk -- --nocapture
@@ -2525,6 +2615,23 @@ mod tests {
         assert_eq!(ext_of("model.STL"), "stl");
         assert_eq!(ext_of("part.stp"), "step");
         assert_eq!(iso_date(0), "1970-01-01");
+    }
+
+    #[test]
+    fn generic_segment_matching() {
+        // Bare words, case-insensitive.
+        assert!(is_generic_segment("STLs"));
+        assert!(is_generic_segment("stl"));
+        assert!(is_generic_segment("Files"));
+        assert!(is_generic_segment("PRINTABLES"));
+        assert!(is_generic_segment("3MF"));
+        // Underscore/dash spacing variants normalize the same way prettify() does.
+        assert!(is_generic_segment("_STLs_"));
+        assert!(is_generic_segment("-Files-"));
+        // A real model name must never accidentally match.
+        assert!(!is_generic_segment("Batman Helmet"));
+        assert!(!is_generic_segment("Dungeon Wall Set"));
+        assert!(!is_generic_segment("Squirtle"));
     }
 
     // A real desktop's mountinfo: root ext4, a NAS reached through GVFS (how a
