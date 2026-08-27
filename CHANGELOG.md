@@ -4,6 +4,14 @@ All notable changes to Trove. This project uses [semantic versioning](https://se
 The section for each version becomes that version's GitHub release notes.
 
 ## [Unreleased]
+### Fixed
+- **Network libraries are no longer auto-watched on Linux.** The "never watch a share"
+  protection added in 2.0.7 was macOS-only, so a NAS indexed on Linux was treated as a
+  local folder and watched — the same phantom-event rescan loop that fix was written for.
+  Linux now reads the real filesystem type from `/proc/self/mountinfo`, which also catches
+  shares mounted through GVFS (a NAS added via Files' "Connect to Server" reports as
+  generic FUSE, so a filesystem-magic check would miss it). Libraries already registered
+  as watched repair themselves on the next launch. Windows still assumes local.
 
 ## [2.1.0]
 ### Added
