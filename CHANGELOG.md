@@ -5,13 +5,15 @@ The section for each version becomes that version's GitHub release notes.
 
 ## [Unreleased]
 ### Fixed
-- **Search finds what you meant.** Five separate defects in how models are indexed and searched:
+- **Search finds what you meant.** Six separate defects in how models are indexed and searched:
   - **Quick Find now matches your words in any order.** It quoted your whole query as one phrase, so "helmet batman" found nothing while "batman helmet" worked. The library search already did this; the two now agree.
   - **Results are ordered by relevance.** Quick Find took an arbitrary 200 matches in database order with no ranking, so on a large library the model you wanted could be dropped for no reason. Matches are now ranked best-first.
   - **Your library's own folder path no longer matches everything.** The full path on disk was indexed, so a library in `~/Dropbox/3D Prints/` made every model match "dropbox" and "prints", burying real results. Only the path inside your library is indexed now — in both Quick Find and the library search.
   - **Models named after a generic subfolder now show their real name.** A model shipped as `Batman Helmet/STLs/*.stl` was listed as "STLs", because the innermost folder holding the files wins. It now walks up to the meaningful folder name.
   - **Project and source files are searchable.** `.blend` files, slicer projects and archives were left out of the Quick Find index entirely, so you couldn't find them by name.
-### Fixed
+  - **Quick Find was dropping every file match.** A type mismatch reading the search index meant file results were discarded before they reached you — for any query of 3 characters or more, Quick Find could only ever return folders. Fixed.
+- **The library search now uses the real search index.** Searching on the Library, Search and Quick Search screens goes through the same index Quick Find uses, so it finds models by **file name** and returns them **best match first** — previously it only matched a model's name, tags, creator, collection and folder, and could not see file names at all.
+- **More folder names recognized as containers.** Models shipped inside `Presupported/`, `Supported/`, `Unsupported/`, `FDM/`, `ChiTuBox/`, `GCode/` or `Sliced/` folders now show the model's real name instead of the bucket's.
 - **Network libraries are no longer auto-watched on Linux.** The "never watch a share"
   protection added in 2.0.7 was macOS-only, so a NAS indexed on Linux was treated as a
   local folder and watched — the same phantom-event rescan loop that fix was written for.
