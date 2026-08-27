@@ -2034,9 +2034,40 @@ pub fn migrate_fts_if_stale(conn: &Connection) {
     }
 }
 
-/// Escape a user query into a single FTS5 quoted string token (safe for trigram).
+/// Build an FTS5 MATCH expression from a user query, safe for the
+/// trigram-tokenized `search_fts` table.
+///
+/// Splits the query on whitespace and requires every word (AND), each
+/// individually quoted as its own FTS5 phrase. Quoting a word neutralizes any
+/// `"`/`:`/`AND`/`NOT`/etc it contains (doubled `"` is the FTS5 escape for a
+/// literal quote), so stray punctuation in one term can't break the query or
+/// inject FTS syntax that leaks into how a sibling term is matched. ANDing
+/// separately-quoted words (instead of quoting the whole query as one
+/// phrase) also makes word order irrelevant, matching the Library search's
+/// any-order behavior (src/data/dataset.ts applyFilters) — quoting the whole
+/// query as one phrase demands that exact contiguous substring, so "helmet
+/// batman" would miss a model that only contains "Batman Helmet".
+///
+/// Trigram can't represent a word under 3 chars at all: a quoted phrase
+/// shorter than 3 chars tokenizes to zero trigrams, and an empty-token
+/// phrase matches nothing — ever, not "matches everything" — so naively
+/// ANDing a short word in would silently zero out every result (e.g. "V2
+/// boat" → no hits). Words under 3 chars are therefore dropped from the AND
+/// list; they can't narrow the trigram match anyway. If EVERY word is under
+/// 3 chars, there's no usable per-word phrase, so fall back to quoting the
+/// whole trimmed query as a single literal (contiguous, order-sensitive)
+/// substring — that's still able to match, and matches the caller's
+/// existing `use_fts` threshold (`quick_search` only reaches FTS once the
+/// full query is >=3 chars, so this fallback phrase is always long enough
+/// to tokenize).
 fn fts_query(q: &str) -> String {
-    format!("\"{}\"", q.replace('"', "\"\""))
+    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let long_words: Vec<String> = q.split_whitespace().filter(|w| w.chars().count() >= 3).map(quote).collect();
+    if long_words.is_empty() {
+        quote(q.trim())
+    } else {
+        long_words.join(" AND ")
+    }
 }
 
 #[tauri::command]
@@ -2059,8 +2090,25 @@ pub fn quick_search(db: State<Db>, query: String) -> Result<QuickResults, String
         let mut fids: Vec<i64> = Vec::new();
         let mut mids: Vec<String> = Vec::new();
         {
+            // ORDER BY rank = FTS5's built-in bm25() relevance, best match
+            // first. Verified against this trigram table (see index.rs test
+            // `fts_rank_orders_by_relevance`, and scratch checks against a
+            // realistic set of rows) that bm25 behaves sensibly here even
+            // though the "terms" it scores are trigrams, not words: bm25
+            // normalizes by document length, so among rows that all satisfy
+            // the AND'd phrases, one whose indexed text (name + folder path
+            // + tags) is short and mostly-the-match ranks above one where
+            // the same words are buried in a long path — a reasonable proxy
+            // for "prefer the model's own name over a deep path match"
+            // given `search_fts` stores one combined text blob per row
+            // (rebuild_fts) rather than separate name/path columns. Without
+            // this, LIMIT below returned an arbitrary 200 rows in rowid
+            // order and silently dropped the rest. 200 stays as the cap —
+            // Quick Find only ever shows the top 7 files + 5 folders, and
+            // now that the best matches sort first, 200 is just headroom,
+            // not the thing that decides which model shows up.
             let mut st = conn
-                .prepare("SELECT kind, ref_id FROM search_fts WHERE search_fts MATCH ?1 LIMIT 200")
+                .prepare("SELECT kind, ref_id FROM search_fts WHERE search_fts MATCH ?1 ORDER BY rank LIMIT 200")
                 .map_err(|e| e.to_string())?;
             let rows = st
                 .query_map(params![m], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
@@ -2788,5 +2836,101 @@ mod tests {
         // Exercises the real is_network_path plumbing end to end (canonicalize +
         // read /proc + parse) against a directory that is definitely local.
         assert!(!is_network_path(&std::env::temp_dir()));
+    }
+
+    #[test]
+    fn fts_query_matches_words_in_any_order() {
+        // Same tree as fts_quick_search_finds_files_and_folders: a descriptive
+        // ancestor folder ("Batman Helmet") with a generic leaf ("STLs/part1.stl").
+        let root = std::env::temp_dir().join(format!("trove_fts_order_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        touch(&root.join("Forge Props/Batman Helmet/STLs/part1.stl"), 64);
+
+        let mut conn = crate::db::open(&root.join("fts.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        ).unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        rebuild_fts(&conn).unwrap();
+
+        let count = |q: &str| -> i64 {
+            conn.query_row("SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH ?1", params![fts_query(q)], |r| r.get(0)).unwrap()
+        };
+        assert!(count("batman helmet") >= 1, "forward word order should match");
+        // The defect: the old implementation quoted the whole query as ONE
+        // phrase, which demands the literal contiguous substring "helmet
+        // batman" — never present, since the folder is "Batman Helmet". ANDing
+        // separately-quoted words fixes this.
+        assert!(count("helmet batman") >= 1, "reverse word order should ALSO match (word-order independence)");
+        assert_eq!(count("batman helmet"), count("helmet batman"), "order shouldn't change the hit count");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fts_query_short_words_in_multiword_query() {
+        // A word under 3 chars can't be represented by the trigram tokenizer
+        // (zero trigrams => a quoted phrase for it matches nothing, ever). A
+        // naive AND of it into a multi-word query would zero out every result,
+        // so it's dropped instead — the longer word(s) still narrow the match.
+        assert_eq!(fts_query("batman ab"), "\"batman\"", "short word dropped, long word kept");
+        assert_eq!(fts_query("batman helmet"), "\"batman\" AND \"helmet\"");
+        // Every word too short for trigram => no per-word phrase is possible;
+        // fall back to quoting the whole trimmed query as one literal substring.
+        assert_eq!(fts_query("ab cd"), "\"ab cd\"");
+    }
+
+    #[test]
+    fn fts_query_punctuation_does_not_break_query_or_inject_syntax() {
+        let root = std::env::temp_dir().join(format!("trove_fts_punct_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let conn = crate::db::open(&root.join("fts.db")).unwrap();
+        conn.execute(
+            "INSERT INTO search_fts (kind, ref_id, text) VALUES ('folder','m1','Cat\"s Cradle Toy')",
+            [],
+        ).unwrap();
+
+        // A literal `"` in the query must not break MATCH parsing (it's FTS5's
+        // own quote-escape char) and must not let column-filter or boolean
+        // syntax (":", "OR", "NOT") leak out of its quoted phrase.
+        let mut st = conn.prepare("SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH ?1").unwrap();
+        for q in ["cat\"s cradle", "bogus_col:cradle", "cradle OR nonexistentxyz"] {
+            let n: rusqlite::Result<i64> = st.query_row(params![fts_query(q)], |r| r.get(0));
+            assert!(n.is_ok(), "query {q:?} should not error, got {n:?}");
+        }
+        let n: i64 = st.query_row(params![fts_query("cat\"s cradle")], |r| r.get(0)).unwrap();
+        assert!(n >= 1, "quoted embedded punctuation should still match the row");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fts_rank_orders_by_relevance() {
+        // Regression for the silent-cap defect: without ORDER BY rank, LIMIT
+        // returns an arbitrary 200 rows in rowid order. Insert a short, exact
+        // match LAST (worst rowid order) and a long, padded, weaker match
+        // FIRST (best rowid order) — a rowid-ordered query would return the
+        // weak match first; a rank-ordered one must not.
+        let root = std::env::temp_dir().join(format!("trove_fts_rank_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let conn = crate::db::open(&root.join("fts.db")).unwrap();
+        conn.execute(
+            "INSERT INTO search_fts (kind, ref_id, text) VALUES
+             ('folder','weak','Deeply Nested Container Folder With Many Extra Descriptive Words batman helmet padding padding padding padding'),
+             ('folder','strong','Batman Helmet')",
+            [],
+        ).unwrap();
+
+        let mut st = conn
+            .prepare("SELECT ref_id FROM search_fts WHERE search_fts MATCH ?1 ORDER BY rank LIMIT 200")
+            .unwrap();
+        let ids: Vec<String> = st.query_map(params![fts_query("batman helmet")], |r| r.get(0)).unwrap().filter_map(|x| x.ok()).collect();
+        assert_eq!(ids.first().map(String::as_str), Some("strong"),
+            "the short, focused match should rank ahead of the long, padded one; got {ids:?}");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
