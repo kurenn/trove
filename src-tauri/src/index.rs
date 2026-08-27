@@ -158,18 +158,36 @@ fn prettify(s: &str) -> String {
 }
 
 /// Generic, non-descriptive folder names creators commonly use to bucket a
-/// model's own files by export format or pipeline stage (`Batman Helmet/STLs/`,
-/// `Dungeon Wall Set/Tiles/`, `Prop/3MF/`, `Figure/Source/`…). None of these
-/// identify the model itself. List = the mesh/CAD file-format words a
-/// "one folder per format" export produces (stl/obj/3mf/step/mesh) plus the
-/// generic organizational nouns used for a folder that just holds model files
-/// (file/part/print/printable/model/source/output), each singular and plural.
+/// model's own files by export format, print-process, or pipeline stage
+/// (`Batman Helmet/STLs/`, `Dragon Bust/Presupported/`, `Prop/3MF/`,
+/// `Figure/Source/`…). None of these identify the model itself. List = the
+/// mesh/CAD file-format words a "one folder per format" export produces
+/// (stl/obj/3mf/step/mesh); the generic organizational nouns used for a folder
+/// that just holds model files (file/part/print/printable/model/source/output),
+/// each singular and plural; the support-state buckets ubiquitous in miniature
+/// releases (supported/unsupported/presupported/supports); slicer-project and
+/// output buckets (chitubox/gcode/sliced); and the FDM process bucket used
+/// when a creator ships both an FDM and a resin mesh for the same model.
 /// Matched case-insensitively, and after the same `_`/`-` → space normalization
-/// `prettify` uses, so `STLs`, `st_ls`-style spacing variants, etc. all match.
+/// `prettify` uses, so `STLs`, `st_ls`-style spacing variants, `Pre-Supported`,
+/// `pre_supported`, etc. all match via the single `"pre supported"` entry
+/// below — no separate hyphen/underscore variant entries are needed.
+///
+/// Deliberately NOT included: `resin` and `lys` (Lychee Slicer's project-file
+/// bucket) — both are ordinary words a creator could plausibly title a model
+/// or collection with (a lamp/glass piece called "Resin", a piece called
+/// "Lys" — Danish/Norwegian for "light"), and neither is required for
+/// tagging (the "resin" material tag already matches on the full folder path
+/// in `auto_tags`, independent of this list). `tiles` also stays out: unlike
+/// every word above, it names WHAT the models are (a set of dungeon/terrain
+/// tile pieces), not how/when they were exported — popping it would misname
+/// the tile set itself, replacing "Tiles" with its parent's name.
 const GENERIC_SEGMENTS: &[&str] = &[
     "stl", "stls", "obj", "objs", "3mf", "3mfs", "step", "stp", "mesh", "meshes",
     "file", "files", "part", "parts", "print", "prints", "printable", "printables",
     "model", "models", "source", "sources", "output", "outputs",
+    "supported", "unsupported", "presupported", "pre supported", "supports",
+    "chitubox", "gcode", "sliced", "fdm",
 ];
 
 /// Is this a generic bucket folder name (see `GENERIC_SEGMENTS`), not a
@@ -701,9 +719,11 @@ const WALK_THREADS: usize = 16;
 
 /// Bump when the scan/grouping logic changes so installed libraries rebuild once
 /// on the next scan (v2 = subtree model grouping; v3 = model display names walk
-/// up past a generic bucket leaf segment like `STLs`/`Tiles`, see
-/// `GENERIC_SEGMENTS`/`is_generic_segment`).
-const SCAN_VERSION: i64 = 3;
+/// up past a generic bucket leaf segment like `STLs`, see
+/// `GENERIC_SEGMENTS`/`is_generic_segment`; v4 = `GENERIC_SEGMENTS` widened to
+/// cover the support-state/slicer/process buckets common in miniature
+/// releases, e.g. `Presupported`/`Chitubox`/`FDM`).
+const SCAN_VERSION: i64 = 4;
 
 /// A message from a walker thread to the DB writer.
 /// (Retained for the `bench_walk` benchmark; the live scan uses `collect_tree`.)
@@ -2434,6 +2454,46 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn miniature_bucket_folders_name_after_the_model_not_the_bucket() {
+        let root = std::env::temp_dir().join(format!("trove_minibucket_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        // The exact pattern this task targets: a support-state bucket one level
+        // below the real model name.
+        touch(&root.join("Creator/Dragon Bust/Presupported/bust.stl"), 64);
+        // Sibling FDM/resin process buckets for the same underlying model.
+        touch(&root.join("Creator/Elf Ranger/FDM/ranger.stl"), 64);
+        touch(&root.join("Creator/Elf Ranger/Resin/ranger_resin.stl"), 64);
+        // A slicer-project + sliced-output bucket pair.
+        touch(&root.join("Creator/Owlbear/ChiTuBox/owlbear.stl"), 64);
+        touch(&root.join("Creator/Owlbear/Sliced/owlbear.stl"), 64);
+        // A deliberately-excluded realistic name: a whole terrain set titled
+        // "Tiles" must keep its own name, not collapse into its parent.
+        touch(&root.join("Creator/Tiles/floor_01.stl"), 64);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        let names: Vec<&str> = ds.models.iter().map(|m| m.name.as_str()).collect();
+
+        assert!(names.contains(&"Dragon Bust"), "Presupported bucket must not steal the name, got {names:?}");
+        assert!(names.contains(&"Elf Ranger"), "FDM bucket must not steal the name, got {names:?}");
+        assert!(names.contains(&"Elf Ranger"), "Resin bucket must not steal the name, got {names:?}"); // both siblings collapse to the same model name
+        assert!(names.contains(&"Owlbear"), "ChiTuBox bucket must not steal the name, got {names:?}");
+        assert!(names.contains(&"Owlbear"), "Sliced bucket must not steal the name, got {names:?}");
+        // The excluded-word regression check: "Tiles" survives as its own name.
+        assert!(names.contains(&"Tiles"), "Tiles is a legitimate content name and must survive, got {names:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     // Gated benchmark: set TROVE_BENCH_DIR to a real folder to compare the serial
     // vs parallel walkers. Skips in normal `cargo test`.
     //   TROVE_BENCH_DIR="/path/to/your/model/library" cargo test bench_walk -- --nocapture
@@ -2784,6 +2844,41 @@ mod tests {
         assert!(!is_generic_segment("Batman Helmet"));
         assert!(!is_generic_segment("Dungeon Wall Set"));
         assert!(!is_generic_segment("Squirtle"));
+    }
+
+    #[test]
+    fn generic_segment_matching_miniature_buckets() {
+        // Support-state buckets, ubiquitous in miniature/prop releases.
+        assert!(is_generic_segment("Supported"));
+        assert!(is_generic_segment("Unsupported"));
+        assert!(is_generic_segment("UNSUPPORTED"));
+        assert!(is_generic_segment("Supports"));
+        // "presupported" (solid) and "pre-supported"/"pre_supported" (hyphen/
+        // underscore, which normalize to a space like everything else) are
+        // different normalized strings and both need to match.
+        assert!(is_generic_segment("Presupported"));
+        assert!(is_generic_segment("Pre-Supported"));
+        assert!(is_generic_segment("pre_supported"));
+        assert!(is_generic_segment("Pre Supported"));
+        // Slicer-project / output / process buckets.
+        assert!(is_generic_segment("ChiTuBox"));
+        assert!(is_generic_segment("GCode"));
+        assert!(is_generic_segment("Sliced"));
+        assert!(is_generic_segment("FDM"));
+        // Underscore/dash spacing variants still normalize like prettify().
+        assert!(is_generic_segment("_Presupported_"));
+        assert!(is_generic_segment("-Sliced-"));
+        assert!(is_generic_segment("_FDM_"));
+
+        // Realistic model/collection names that were deliberately EXCLUDED must
+        // never be captured — capturing one would silently replace a correct
+        // name with its parent folder's, which is worse than the bug this list
+        // fixes. "Resin" and "Lys" are real, evocative words a creator could
+        // title a piece with; "Tiles" is the name of WHAT a terrain/dungeon
+        // tile set actually is, not an export bucket.
+        assert!(!is_generic_segment("Resin"), "a collection literally named Resin must survive");
+        assert!(!is_generic_segment("Lys"), "Lys (light, in Danish/Norwegian) is a plausible model title");
+        assert!(!is_generic_segment("Tiles"), "Tiles names the content of a terrain set, not a pipeline stage");
     }
 
     // A real desktop's mountinfo: root ext4, a NAS reached through GVFS (how a
