@@ -1932,23 +1932,41 @@ pub fn save_thumb(
 /// Rebuild the Quick Find FTS index from the base tables (run after a scan).
 fn rebuild_fts(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM search_fts", [])?;
-    // One row per file (file-name search).
+    // One row per file (file-name search) — ALL files, not just "printable"
+    // parts. `is_part=0` is the "Project & source files" bucket (.blend, slicer
+    // projects, archives); without this a user couldn't find a .blend by name.
+    // `kind` stays 'file' either way so quick_search/quick_file_by_id (which
+    // don't filter on is_part) keep working unchanged.
     conn.execute(
         "INSERT INTO search_fts (kind, ref_id, text)
-         SELECT 'file', f.id, f.name FROM files f WHERE f.is_part = 1",
+         SELECT 'file', f.id, f.name FROM files f",
         [],
     )?;
-    // One row per model: name + folder path + tags. The folder path lets Quick
-    // Find match a model by a descriptive ancestor folder (e.g. "Batman Helmet")
-    // even when the model's own name + STL files are generic. Path separators and
-    // _/- become spaces so "batman helmet" matches a "Batman_Helmet" folder too.
+    // One row per model: name + folder path (RELATIVE to its library root) +
+    // tags. Indexing the absolute path pollutes every model with the library
+    // root's own words — e.g. a library mounted at ~/Dropbox/3D Prints/ would
+    // make "dropbox" and "prints" match every single model. `models.folder`
+    // itself stays absolute (used for reveal-in-folder); only the indexed text
+    // is stripped down to the part under the library root. The relative path
+    // still lets Quick Find match a model by a descriptive ancestor folder
+    // (e.g. "Batman Helmet") even when the model's own name + files are
+    // generic. Path separators and _/- become spaces so "batman helmet"
+    // matches a "Batman_Helmet" folder too. The CASE guard is defensive: if a
+    // model's folder ever doesn't literally start with its library's stored
+    // path (it always should — both are derived from the same scan-time root
+    // string — but a stale row after e.g. a library path edit shouldn't be
+    // impossible), fall back to the full folder rather than a garbled offset.
     conn.execute(
         "INSERT INTO search_fts (kind, ref_id, text)
          SELECT 'folder', m.id,
                 m.name || ' ' ||
-                REPLACE(REPLACE(REPLACE(m.folder, '/', ' '), '_', ' '), '-', ' ') || ' ' ||
+                REPLACE(REPLACE(REPLACE(
+                    CASE WHEN SUBSTR(m.folder, 1, LENGTH(l.path)) = l.path
+                         THEN SUBSTR(m.folder, LENGTH(l.path) + 1)
+                         ELSE m.folder END,
+                '/', ' '), '_', ' '), '-', ' ') || ' ' ||
                 COALESCE((SELECT group_concat(t.tag,' ') FROM tags t WHERE t.model_id=m.id),'')
-         FROM models m",
+         FROM models m JOIN libraries l ON l.id = m.library_id",
         [],
     )?;
     Ok(())
@@ -1959,7 +1977,7 @@ fn rebuild_fts(conn: &Connection) -> rusqlite::Result<()> {
 /// folder-path search — without the user having to manually reindex. Bump
 /// FTS_VERSION whenever `rebuild_fts`'s indexed text changes.
 pub fn migrate_fts_if_stale(conn: &Connection) {
-    const FTS_VERSION: i64 = 1;
+    const FTS_VERSION: i64 = 2;
     let stored: i64 = conn
         .query_row("SELECT value FROM settings WHERE key='fts_version'", [], |r| r.get::<_, String>(0))
         .ok()
@@ -2370,6 +2388,92 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH ?1", params![fts_query("batman")], |r| r.get(0))
             .unwrap();
         assert!(n >= 1, "expected 'batman' to match via the folder path, got {n}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fts_folder_relative_path_excludes_root_includes_own_folder() {
+        // The library root itself carries a distinctive marker word that never
+        // appears in any model's own name/relative-folder/tags.
+        let root = std::env::temp_dir().join(format!("trove_zzzlibrootmarker_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // Descriptive folder name, generic file — same pattern as the
+        // "Batman Helmet" case above, just under a marked root.
+        touch(&root.join("Dragon Statue/part1.stl"), 64);
+
+        let mut conn = crate::db::open(&root.join("rel.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        ).unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        rebuild_fts(&conn).unwrap();
+
+        // (a) A word that ONLY appears in the library ROOT path must NOT match —
+        // before the fix, the absolute folder (root + relative path) was indexed,
+        // so every model in the library matched every word in the root path.
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH ?1",
+                params![fts_query("zzzlibrootmarker")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0, "library root path word leaked into the folder index, got {n} rows");
+
+        // (b) The model's own descriptive folder name still matches.
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH ?1",
+                params![fts_query("dragon")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "expected the model's own folder name to still match, got {n}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fts_indexes_project_source_files_not_just_parts() {
+        let root = std::env::temp_dir().join(format!("trove_blend_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // NOTE: `persist_scan` (this test helper) walks via `collect_model_dirs`,
+        // which only recognizes a dir as a model when it holds a PRINTABLE file
+        // (unlike the live scanner's `group_models`, which also accepts a
+        // `.blend`-only dir via `is_model_file`). So pair the project file with a
+        // printable so the folder is grouped as a model at all — the point under
+        // test is that the .blend row itself (is_part=0) still gets indexed.
+        touch(&root.join("Workshop/prop.stl"), 64);
+        touch(&root.join("Workshop/scene_render.blend"), 64);
+
+        let mut conn = crate::db::open(&root.join("blend.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        ).unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        rebuild_fts(&conn).unwrap();
+
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH ?1",
+                params![fts_query("scene_render")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(n >= 1, "expected the .blend project file to be findable by name, got {n}");
+
+        // quick_search's FTS 'file' path resolves hits through quick_file_by_id,
+        // which joins files→models with no is_part filter — confirm it resolves
+        // a non-part file correctly rather than relying on that being incidental.
+        let fid: i64 = conn
+            .query_row("SELECT f.id FROM files f WHERE f.name='scene_render.blend'", [], |r| r.get(0))
+            .unwrap();
+        let qf = quick_file_by_id(&conn, fid).unwrap();
+        assert_eq!(qf.name, "scene_render.blend");
+        assert_eq!(qf.ftype, "blend");
 
         let _ = fs::remove_dir_all(&root);
     }
