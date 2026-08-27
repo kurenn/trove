@@ -616,18 +616,29 @@ fn insert_record(conn: &Connection, lib_id: &str, rec: &ModelRecord) -> rusqlite
     Ok(())
 }
 
-/// Synchronous full scan into the given connection (one transaction). Used by
-/// tests; the live app uses `do_scan` (background, chunked).
+/// Synchronous full scan into the given connection (one transaction). Drives the
+/// SAME `collect_tree` + `group_models` phases the live incremental scanner
+/// (`do_scan`) uses, so this test helper can never disagree with production about
+/// what counts as a model (candidacy, container/nesting absorption, the
+/// printable-or-`.blend` rule — see `group_models`). Used by tests; the live app
+/// uses `do_scan` (background, chunked, incremental).
 #[allow(dead_code)]
 fn persist_scan(conn: &mut Connection, lib_id: &str, root: &Path) -> rusqlite::Result<(u32, u32)> {
     conn.execute("DELETE FROM models WHERE library_id = ?1", params![lib_id])?;
-    let never = AtomicBool::new(false);
-    let dirs = collect_model_dirs(root, &never, &mut |_| {});
+
+    let dirs = Arc::new(Mutex::new(BTreeMap::new()));
+    let d2 = dirs.clone();
+    let on_dir: Arc<dyn Fn(PathBuf, Vec<ScannedFile>, i64) + Send + Sync> =
+        Arc::new(move |p, f, m| { d2.lock().unwrap().insert(p, (f, m)); });
+    collect_tree(root, Arc::new(AtomicBool::new(false)), 4, on_dir);
+    let dirs = dirs.lock().unwrap().clone();
+    let grouped = group_models(root, &dirs);
+
     let mut models = 0u32;
     let mut files = 0u32;
     let tx = conn.transaction()?;
-    for (dir, fs) in dirs {
-        let rec = compute_record(root, &dir, mtime_secs(&dir), fs);
+    for gm in grouped {
+        let rec = compute_record(root, &gm.dir, gm.fingerprint, gm.files);
         files += rec.file_count;
         insert_record(&tx, lib_id, &rec)?;
         models += 1;
@@ -2577,12 +2588,10 @@ mod tests {
     fn fts_indexes_project_source_files_not_just_parts() {
         let root = std::env::temp_dir().join(format!("trove_blend_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        // NOTE: `persist_scan` (this test helper) walks via `collect_model_dirs`,
-        // which only recognizes a dir as a model when it holds a PRINTABLE file
-        // (unlike the live scanner's `group_models`, which also accepts a
-        // `.blend`-only dir via `is_model_file`). So pair the project file with a
-        // printable so the folder is grouped as a model at all — the point under
-        // test is that the .blend row itself (is_part=0) still gets indexed.
+        // Pair the project file with a printable — the point under test here is
+        // that the .blend row itself (is_part=0) still gets indexed alongside a
+        // part, not just that a `.blend`-only folder is recognized as a model at
+        // all (see `blend_only_folder_is_a_model_and_searchable` for that).
         touch(&root.join("Workshop/prop.stl"), 64);
         touch(&root.join("Workshop/scene_render.blend"), 64);
 
@@ -2612,6 +2621,48 @@ mod tests {
         let qf = quick_file_by_id(&conn, fid).unwrap();
         assert_eq!(qf.name, "scene_render.blend");
         assert_eq!(qf.ftype, "blend");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn blend_only_folder_is_a_model_and_searchable() {
+        // Regression test for v2.0.9: a folder holding ONLY a `.blend` file (no
+        // printable mesh) is still indexed as a model — `group_models`/
+        // `is_model_file` treat `.blend` as defining a model on its own. Before
+        // `persist_scan` was made to drive the real `collect_tree`/`group_models`
+        // phases, this test helper gated on `is_printable` only (via
+        // `collect_model_dirs`) and silently dropped the folder, so this case
+        // could never be exercised here even though production indexed it fine.
+        let root = std::env::temp_dir().join(format!("trove_blendonly_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        touch(&root.join("Workshop/scene_render.blend"), 64);
+
+        let mut conn = crate::db::open(&root.join("blendonly.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        ).unwrap();
+        let (models, files) = persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(models, 1, "a .blend-only folder must be indexed as a model");
+        assert_eq!(files, 1);
+
+        let ds = build_dataset(&conn).unwrap();
+        assert_eq!(ds.models.len(), 1);
+        let m = &ds.models[0];
+        assert_eq!(m.name, "Workshop");
+        assert!(m.file_types.contains(&"blend".to_string()), "file_types: {:?}", m.file_types);
+
+        // Findable in the FTS index by filename, same as the printable-paired case.
+        rebuild_fts(&conn).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH ?1",
+                params![fts_query("scene_render")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(n >= 1, "expected the .blend-only model's file to be findable by name, got {n}");
 
         let _ = fs::remove_dir_all(&root);
     }
