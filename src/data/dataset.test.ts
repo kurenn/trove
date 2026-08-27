@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { applyFilters, isReal, partCount, fileCount } from "./dataset";
 import { useApp } from "../lib/store";
-import { DEFAULT_FILTERS, type Filters, type Model, type GeometryKey } from "./types";
+import { DEFAULT_FILTERS, type Filters, type Model, type GeometryKey, type Library } from "./types";
+
+function library(over: Partial<Library> = {}): Library {
+  return { id: "l1", name: "Lib", type: "local", path: "/tmp/x", models: 0, files: 0, status: "watching", last: "", ...over };
+}
 
 function model(over: Partial<Model> = {}): Model {
   return {
@@ -15,6 +19,7 @@ function model(over: Partial<Model> = {}): Model {
 const filters = (over: Partial<Filters> = {}): Filters => ({ ...DEFAULT_FILTERS, ...over });
 
 // applyFilters resolves the creator/collection *names* for search via the store; seed them.
+// `libraries` resets to [] each test — the library-root-stripping tests below opt in.
 beforeEach(() => {
   useApp.setState({
     data: {
@@ -22,6 +27,7 @@ beforeEach(() => {
       CREATORS: [{ id: "voxel", name: "Studio Voxel", handle: "@voxel", models: 0, blurb: "", tone: "#000" }],
       COLLECTIONS: [{ id: "helmets", name: "Helmets", blurb: "", cover: "cube", tone: "#000", count: 0 }],
     },
+    libraries: [],
   });
 });
 
@@ -94,6 +100,32 @@ describe("applyFilters — finds models by descriptive folder name", () => {
       model({ id: "b", name: "other", collection: "" }),
     ];
     expect(applyFilters(models, "helmets", filters()).map((m) => m.id)).toEqual(["a"]);
+  });
+});
+
+describe("applyFilters — strips the library root from the folder haystack", () => {
+  it("a word that appears only in the library's mount path no longer matches", () => {
+    useApp.setState({ libraries: [library({ path: "/tmp/x/scratchpad/trove-lib" })] });
+    const models = [model({ id: "a", name: "Widget", folder: "/tmp/x/scratchpad/trove-lib/Marvel/Widget" })];
+    // "scratchpad" and "trove" only occur in the library root, not the model's own path.
+    expect(applyFilters(models, "scratchpad", filters())).toEqual([]);
+    expect(applyFilters(models, "trove", filters())).toEqual([]);
+  });
+
+  it("still finds a model by a descriptive ancestor folder once the root is stripped", () => {
+    useApp.setState({ libraries: [library({ path: "/tmp/x/scratchpad/trove-lib" })] });
+    const models = [
+      model({ id: "a", name: "Stls", folder: "/tmp/x/scratchpad/trove-lib/Marvel/Batman Helmet/STLs" }),
+      model({ id: "b", name: "Parts", folder: "/tmp/x/scratchpad/trove-lib/Marvel/Iron Man/parts" }),
+    ];
+    expect(applyFilters(models, "batman helmet", filters()).map((m) => m.id)).toEqual(["a"]);
+  });
+
+  it("falls back to the raw folder (no crash) when the model's library is unknown", () => {
+    useApp.setState({ libraries: [library({ id: "other", path: "/tmp/x/some-other-lib" })] });
+    const models = [model({ id: "a", name: "Stls", folder: "/lib/Marvel/Batman Helmet/STLs" })];
+    expect(() => applyFilters(models, "batman helmet", filters())).not.toThrow();
+    expect(applyFilters(models, "batman helmet", filters()).map((m) => m.id)).toEqual(["a"]);
   });
 });
 
