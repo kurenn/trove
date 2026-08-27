@@ -269,7 +269,8 @@ fn iso_date(secs: i64) -> String {
 /// A path's modification time in epoch seconds (0 if unavailable).
 /// True if `path` is on a network filesystem (SMB/NFS/AFP/WebDAV). FSEvents over
 /// such mounts fires phantom/repeating change events, so we never auto-watch them
-/// (it caused an endless rescan loop). macOS uses statfs; other platforms assume local.
+/// (it caused an endless rescan loop). macOS reads statfs; Linux reads the real
+/// filesystem type out of /proc/self/mountinfo; other platforms assume local.
 #[cfg(target_os = "macos")]
 pub fn is_network_path(path: &Path) -> bool {
     use std::ffi::CString;
@@ -294,9 +295,113 @@ pub fn is_network_path(path: &Path) -> bool {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn is_network_path(path: &Path) -> bool {
+    // `statfs.f_type` is NOT enough here: a NAS reached through GVFS (the ordinary
+    // desktop route — Files' "Connect to Server") reports the generic FUSE magic,
+    // indistinguishable from a local FUSE mount. /proc/self/mountinfo carries the
+    // real type, including the `fuse.<subtype>` that names the share.
+    // Resolve symlinks so a local-looking path into a share is still caught; the
+    // caller already stats this path, so this adds no new exposure to a wedged mount.
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !resolved.is_absolute() {
+        return false;
+    }
+    match std::fs::read_to_string("/proc/self/mountinfo") {
+        Ok(mi) => mount_fstype_for(&resolved, &mi).is_some_and(fstype_is_network),
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn is_network_path(_path: &Path) -> bool {
     false
+}
+
+/// True for filesystem types that live on another machine. Watching one is the
+/// problem: change notifications over a share are unreliable (FSEvents repeats
+/// them forever), so a watched share re-triggers its own rescan, endlessly.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn fstype_is_network(fstype: &str) -> bool {
+    const NET: &[&str] = &[
+        "cifs", "smb3", "smbfs", "nfs", "nfs4", "afs", "ceph", "glusterfs", "9p", "ncpfs", "coda",
+    ];
+    // Userspace network filesystems all surface as `fuse.<subtype>`. Bare `fuse`
+    // and `fuseblk` are local (AppImage, MTP, ntfs-3g) and stay watchable —
+    // over-blocking them would silently drop live updates for local libraries.
+    const FUSE_NET: &[&str] = &[
+        "gvfsd-fuse", "sshfs", "rclone", "davfs", "s3fs", "curlftpfs", "smbnetfs", "cephfs",
+    ];
+    match fstype.strip_prefix("fuse.") {
+        Some(subtype) => FUSE_NET.contains(&subtype),
+        None => NET.contains(&fstype),
+    }
+}
+
+/// The filesystem type of the mount containing `path`, read out of the contents
+/// of /proc/self/mountinfo. Takes the text rather than the file so it is testable.
+///
+/// Line shape (kernel `fs/proc_namespace.c`):
+///   36 35 98:0 /mnt1 /mnt2 rw,noatime shared:1 - ext3 /dev/root rw
+///                    ^ field 5: mount point        ^ first field after " - ": fstype
+/// A variable number of optional `shared:1`-style tags sit before the separator,
+/// so " - " is what splits the two halves — not a fixed column.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn mount_fstype_for<'a>(path: &Path, mountinfo: &'a str) -> Option<&'a str> {
+    let target = path.to_str()?;
+    let mut best: Option<(usize, &'a str)> = None;
+    for line in mountinfo.lines() {
+        let Some((head, tail)) = line.split_once(" - ") else { continue };
+        let Some(mount_point) = head.split_whitespace().nth(4).map(unescape_octal) else { continue };
+        let Some(fstype) = tail.split_whitespace().next() else { continue };
+        if !path_under(target, &mount_point) {
+            continue;
+        }
+        // Longest mount point wins; on a tie the later line wins, since an
+        // overmount shadows whatever it was stacked on.
+        if best.map_or(true, |(len, _)| mount_point.len() >= len) {
+            best = Some((mount_point.len(), fstype));
+        }
+    }
+    best.map(|(_, fstype)| fstype)
+}
+
+/// Component-wise containment: `/mnt/nas` holds `/mnt/nas/a` but not `/mnt/nasty`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn path_under(target: &str, mount_point: &str) -> bool {
+    if mount_point == "/" {
+        return target.starts_with('/');
+    }
+    target.starts_with(mount_point)
+        && matches!(target.as_bytes().get(mount_point.len()), None | Some(b'/'))
+}
+
+/// mountinfo escapes space, tab, newline and backslash in paths as octal (`\040`).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn unescape_octal(s: &str) -> String {
+    if !s.contains('\\') {
+        return s.to_string();
+    }
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let esc = (b[i] == b'\\' && i + 3 < b.len())
+            .then(|| std::str::from_utf8(&b[i + 1..i + 4]).ok())
+            .flatten()
+            .and_then(|o| u8::from_str_radix(o, 8).ok());
+        match esc {
+            Some(byte) => {
+                out.push(byte);
+                i += 4;
+            }
+            None => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn mtime_secs(p: &Path) -> i64 {
@@ -1680,6 +1785,9 @@ pub fn add_library(
     // Network shares can't be reliably watched (phantom FSEvents loop), so never
     // enable watch for them — they refresh via manual Reindex.
     if is_network_path(&root) {
+        // Say so: the user may have explicitly ticked "Watch for changes" in the
+        // wizard, and silently ignoring it leaves "my NAS never updates" with no trace.
+        eprintln!("[scan] {path}: network mount — auto-watch disabled, refresh with Reindex");
         opts.watch = false;
     }
     let lib_id = format!("l{:x}", fnv1a(&path));
@@ -2417,5 +2525,57 @@ mod tests {
         assert_eq!(ext_of("model.STL"), "stl");
         assert_eq!(ext_of("part.stp"), "step");
         assert_eq!(iso_date(0), "1970-01-01");
+    }
+
+    // A real desktop's mountinfo: root ext4, a NAS reached through GVFS (how a
+    // share actually shows up on Linux — `fuse.gvfsd-fuse`, never `cifs`), a
+    // kernel CIFS mount, NFS, a local FUSE mount, and an escaped space.
+    const MOUNTINFO: &str = concat!(
+        "25 30 0:23 / /proc rw,nosuid,nodev,noexec,relatime shared:5 - proc proc rw\n",
+        "667 1 259:2 / / rw,noatime shared:1 - ext4 /dev/nvme0n1p2 rw\n",
+        "356 667 0:84 / /run/user/1000/gvfs rw,nosuid,relatime shared:650 - fuse.gvfsd-fuse gvfsd-fuse rw,user_id=1000\n",
+        "400 667 0:99 / /mnt/nas rw,relatime shared:700 - cifs //192.168.1.10/media rw\n",
+        "401 667 0:98 / /mnt/backup rw,relatime shared:701 - nfs4 10.0.0.5:/vol rw\n",
+        "403 667 0:96 / /media/my\\040disk rw,relatime shared:703 - ext4 /dev/sdb1 rw\n",
+        "404 667 0:95 / /opt/appimg rw,relatime shared:704 - fuse squashfuse rw\n",
+    );
+
+    #[test]
+    fn mountinfo_resolves_the_containing_mount() {
+        let ft = |p: &str| mount_fstype_for(Path::new(p), MOUNTINFO);
+        // The case that bit us: a NAS mounted via GVFS, which statfs reports as
+        // plain "fuse" and so a magic-number check would miss entirely.
+        assert_eq!(
+            ft("/run/user/1000/gvfs/smb-share:server=192.168.1.10,share=models"),
+            Some("fuse.gvfsd-fuse")
+        );
+        assert_eq!(ft("/mnt/nas/props/helmet"), Some("cifs"));
+        assert_eq!(ft("/mnt/backup"), Some("nfs4"));
+        assert_eq!(ft("/opt/appimg/x"), Some("fuse"));
+        // No specific mount contains it, so it falls through to root.
+        assert_eq!(ft("/home/ada/models"), Some("ext4"));
+        // Containment is component-wise: /mnt/nasty is not inside /mnt/nas.
+        assert_eq!(ft("/mnt/nasty/x"), Some("ext4"));
+        // Octal-escaped space in the mount point.
+        assert_eq!(ft("/media/my disk/models"), Some("ext4"));
+        assert_eq!(ft("relative/path"), None);
+    }
+
+    #[test]
+    fn only_remote_filesystems_count_as_network() {
+        for net in ["cifs", "smb3", "nfs", "nfs4", "fuse.gvfsd-fuse", "fuse.sshfs", "fuse.rclone"] {
+            assert!(fstype_is_network(net), "{net} should be treated as network");
+        }
+        // Bare FUSE is local (AppImage, MTP, ntfs-3g) and must stay watchable.
+        for local in ["ext4", "btrfs", "xfs", "tmpfs", "apfs", "fuse", "fuseblk", "fuse.portal"] {
+            assert!(!fstype_is_network(local), "{local} should be treated as local");
+        }
+    }
+
+    #[test]
+    fn local_paths_are_not_flagged_as_network() {
+        // Exercises the real is_network_path plumbing end to end (canonicalize +
+        // read /proc + parse) against a directory that is definitely local.
+        assert!(!is_network_path(&std::env::temp_dir()));
     }
 }
