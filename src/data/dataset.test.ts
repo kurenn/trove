@@ -129,6 +129,53 @@ describe("applyFilters — strips the library root from the folder haystack", ()
   });
 });
 
+describe("applyFilters — backend search (searchIds)", () => {
+  const models = [
+    model({ id: "a", name: "Batman Helmet", added: "2026-01-01" }),
+    model({ id: "b", name: "Generic Prop", added: "2026-06-01" }), // matched only via searchIds (e.g. a filename hit)
+    model({ id: "c", name: "Iron Man Helmet", added: "2026-03-01" }),
+  ];
+
+  it("restricts to the given ids instead of the substring haystack", () => {
+    // "b" has no textual match at all — only reachable through searchIds, as a
+    // real (slim) model found by a filename the client can't see.
+    expect(applyFilters(models, "prop", filters(), ["b"]).map((m) => m.id)).toEqual(["b"]);
+  });
+
+  it("still applies the other facet filters (tags/types/license/supportFree) on top of searchIds", () => {
+    const withTag = [
+      model({ id: "a", name: "Batman Helmet", tags: ["cosplay"] }),
+      model({ id: "b", name: "Batman Visor", tags: ["functional"] }),
+    ];
+    expect(applyFilters(withTag, "batman", filters({ tags: ["cosplay"] }), ["a", "b"]).map((m) => m.id)).toEqual(["a"]);
+  });
+
+  it("null keeps today's exact substring behavior (no regression for mock/browser)", () => {
+    const m = [model({ id: "a", name: "Batman Helmet" })];
+    expect(applyFilters(m, "batman", filters(), null)).toEqual(applyFilters(m, "batman", filters()));
+    expect(applyFilters(m, "batman", filters(), null).map((x) => x.id)).toEqual(["a"]);
+  });
+
+  it("omitting the argument entirely also keeps substring behavior", () => {
+    const m = [model({ id: "a", name: "Batman Helmet" })];
+    expect(applyFilters(m, "batman", filters()).map((x) => x.id)).toEqual(["a"]);
+  });
+
+  it("with the default sort, orders by searchIds' relevance rank rather than newest-first", () => {
+    // "c" (added last) ranks WORSE than "a" here — relevance rank must win over
+    // the newest-first default so the backend's best match shows first.
+    expect(applyFilters(models, "helmet", filters(), ["a", "c"]).map((m) => m.id)).toEqual(["a", "c"]);
+  });
+
+  it("an explicit sort choice still overrides relevance order", () => {
+    expect(applyFilters(models, "helmet", filters({ sort: "name" }), ["c", "a"]).map((m) => m.id)).toEqual(["a", "c"]);
+  });
+
+  it("an empty query ignores searchIds and returns everything", () => {
+    expect(applyFilters(models, "", filters(), ["a"]).map((m) => m.id).sort()).toEqual(["a", "b", "c"]);
+  });
+});
+
 describe("applyFilters — facets", () => {
   it("requires ALL selected tags (AND semantics)", () => {
     const models = [

@@ -114,6 +114,7 @@ pub fn run() {
             index::set_watch,
             index::save_thumb,
             index::quick_search,
+            index::search_model_ids,
             index::get_setting,
             index::set_setting,
             quickfind::get_quickfind_shortcut,

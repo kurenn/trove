@@ -2070,6 +2070,41 @@ fn fts_query(q: &str) -> String {
     }
 }
 
+/// Run a `search_fts` MATCH query, best match first, and return raw
+/// `(kind, ref_id)` rows. Shared by `quick_search` and `search_model_ids` —
+/// both need the same ranked (kind, ref_id) stream, just resolved into
+/// different shapes for their own callers.
+///
+/// `ref_id` is an untyped FTS5 `UNINDEXED` column: it's stored as whatever
+/// value was inserted (`rebuild_fts`) — a `models.id` TEXT for 'folder' rows,
+/// a `files.id` INTEGER for 'file' rows. Reading it with rusqlite's typed
+/// `get::<_, String>` does NOT coerce an INTEGER-stored value to text the way
+/// the raw SQLite C API's `sqlite3_column_text()` would — rusqlite's
+/// `ValueRef::as_str()` errors on a non-Text storage class — so a naive
+/// `SELECT ref_id` would make query_map return Err for every 'file' row, and
+/// `.flatten()` silently drops those: FTS file-name matches would vanish
+/// from every search, with no error surfaced anywhere. `CAST(ref_id AS TEXT)`
+/// forces the SQL-level conversion so both kinds always come back as an
+/// actual TEXT value. (Caught by index.rs test `search_model_ids_finds_by_file_name_only`,
+/// which is what this file-only-match path looks like without the cast.)
+///
+/// ORDER BY rank = FTS5's built-in bm25() relevance, best match first.
+/// Verified against this trigram table (see test `fts_rank_orders_by_relevance`,
+/// and scratch checks against a realistic set of rows) that bm25 behaves
+/// sensibly here even though the "terms" it scores are trigrams, not words:
+/// bm25 normalizes by document length, so among rows that all satisfy the
+/// AND'd phrases, one whose indexed text (name + folder path + tags) is short
+/// and mostly-the-match ranks above one where the same words are buried in a
+/// long path — a reasonable proxy for "prefer the model's own name over a
+/// deep path match" given `search_fts` stores one combined text blob per row
+/// (`rebuild_fts`) rather than separate name/path columns.
+fn fts_match_rows(conn: &Connection, q: &str, limit: u32) -> rusqlite::Result<Vec<(String, String)>> {
+    let m = fts_query(q);
+    let mut st = conn.prepare("SELECT kind, CAST(ref_id AS TEXT) FROM search_fts WHERE search_fts MATCH ?1 ORDER BY rank LIMIT ?2")?;
+    let rows = st.query_map(params![m, limit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    Ok(rows.flatten().collect())
+}
+
 #[tauri::command]
 pub fn quick_search(db: State<Db>, query: String) -> Result<QuickResults, String> {
     let q = query.trim().to_lowercase();
@@ -2086,39 +2121,17 @@ pub fn quick_search(db: State<Db>, query: String) -> Result<QuickResults, String
     // Trigram FTS needs ≥3 chars; fall back to LIKE for short queries.
     let use_fts = q.chars().count() >= 3;
     if use_fts {
-        let m = fts_query(&q);
         let mut fids: Vec<i64> = Vec::new();
         let mut mids: Vec<String> = Vec::new();
-        {
-            // ORDER BY rank = FTS5's built-in bm25() relevance, best match
-            // first. Verified against this trigram table (see index.rs test
-            // `fts_rank_orders_by_relevance`, and scratch checks against a
-            // realistic set of rows) that bm25 behaves sensibly here even
-            // though the "terms" it scores are trigrams, not words: bm25
-            // normalizes by document length, so among rows that all satisfy
-            // the AND'd phrases, one whose indexed text (name + folder path
-            // + tags) is short and mostly-the-match ranks above one where
-            // the same words are buried in a long path — a reasonable proxy
-            // for "prefer the model's own name over a deep path match"
-            // given `search_fts` stores one combined text blob per row
-            // (rebuild_fts) rather than separate name/path columns. Without
-            // this, LIMIT below returned an arbitrary 200 rows in rowid
-            // order and silently dropped the rest. 200 stays as the cap —
-            // Quick Find only ever shows the top 7 files + 5 folders, and
-            // now that the best matches sort first, 200 is just headroom,
-            // not the thing that decides which model shows up.
-            let mut st = conn
-                .prepare("SELECT kind, ref_id FROM search_fts WHERE search_fts MATCH ?1 ORDER BY rank LIMIT 200")
-                .map_err(|e| e.to_string())?;
-            let rows = st
-                .query_map(params![m], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                .map_err(|e| e.to_string())?;
-            for row in rows.flatten() {
-                if row.0 == "file" {
-                    if let Ok(id) = row.1.parse::<i64>() { fids.push(id); }
-                } else {
-                    mids.push(row.1);
-                }
+        // 200 stays as the cap — Quick Find only ever shows the top 7 files +
+        // 5 folders, and now that the best matches sort first (see
+        // `fts_match_rows`), 200 is just headroom, not the thing that decides
+        // which model shows up.
+        for (kind, ref_id) in fts_match_rows(&conn, &q, 200).map_err(|e| e.to_string())? {
+            if kind == "file" {
+                if let Ok(id) = ref_id.parse::<i64>() { fids.push(id); }
+            } else {
+                mids.push(ref_id);
             }
         }
         for id in fids.iter().take(7) {
@@ -2201,6 +2214,72 @@ fn collect_quick_folders(conn: &Connection, like: Option<&str>, out: &mut Vec<Qu
         if let Ok(f) = quick_folder_by_id(conn, &id) { out.push(f); }
     }
     Ok(())
+}
+
+/// Model ids matching `query`, ranked best-first, for the Library/Search/
+/// Collections screens (`applyFilters` in src/data/dataset.ts). Unlike
+/// `quick_search` (which returns display-ready rows split into a files list +
+/// a folders list for the launcher's two preview sections), this needs a
+/// single ordered list of model ids: the grid already holds the full slim
+/// `Model` records client-side (see `build_dataset`, which sends
+/// `files: Vec::new()`), it just can't search filenames locally because that
+/// field never ships in the slim payload. Routing filename search through
+/// this existing FTS index — instead of shipping every filename to the
+/// client — is what keeps the slim-payload perf work (v2.1.0) intact.
+///
+/// Reuses `search_fts`/`fts_query` exactly as `quick_search` does. `kind='file'`
+/// rows carry a `files.id`, resolved to its owning model below; `kind='folder'`
+/// rows already carry the model id directly. A model can surface via both its
+/// own folder-name hit and 1+ file-name hits, so ids are deduped, keeping each
+/// id's FIRST (best-ranked, since rows arrive `ORDER BY rank`) position.
+///
+/// Trigram FTS can't represent a word under 3 chars at all (see `fts_query`'s
+/// doc comment) — below that, `fts_query`'s own fallback phrase still can't
+/// tokenize and the query would just come back empty. The frontend therefore
+/// only calls this once the (trimmed) query is >=3 chars — the same `use_fts`
+/// threshold `quick_search` uses — and falls back to its existing client-side
+/// substring search (which still covers name/tags/creator/collection/folder,
+/// just not filenames) below that. The early return here is a defensive
+/// mirror of that same gate, not a path the UI is expected to hit.
+///
+/// Caps: reads up to 1000 ranked FTS rows — 5x `quick_search`'s 200, which
+/// only needs to fill a 7-file + 5-folder launcher preview; here every match
+/// feeds the grid, and dedup needs enough raw material to still reach a good
+/// count of unique models even when many hits collapse onto the same handful
+/// of models. The deduped result is capped at 500 unique ids: comfortably
+/// above the grid's own `>150 cards` virtualization threshold, so a query
+/// broad enough to still exceed it is better narrowed by the user than paged
+/// through — and it bounds this command's work independent of library size.
+fn search_model_ids_ranked(conn: &Connection, q: &str) -> rusqlite::Result<Vec<String>> {
+    if q.chars().count() < 3 {
+        return Ok(Vec::new());
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut ids: Vec<String> = Vec::new();
+    for (kind, ref_id) in fts_match_rows(conn, q, 1000)? {
+        let mid = if kind == "file" {
+            ref_id.parse::<i64>().ok().and_then(|fid| {
+                conn.query_row("SELECT model_id FROM files WHERE id=?1", params![fid], |r| r.get::<_, String>(0)).ok()
+            })
+        } else {
+            Some(ref_id)
+        };
+        if let Some(mid) = mid {
+            if seen.insert(mid.clone()) {
+                ids.push(mid);
+                if ids.len() >= 500 {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
+#[tauri::command]
+pub fn search_model_ids(db: State<Db>, query: String) -> Result<Vec<String>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    search_model_ids_ranked(&conn, query.trim().to_lowercase().as_str()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2930,6 +3009,82 @@ mod tests {
         let ids: Vec<String> = st.query_map(params![fts_query("batman helmet")], |r| r.get(0)).unwrap().filter_map(|x| x.ok()).collect();
         assert_eq!(ids.first().map(String::as_str), Some("strong"),
             "the short, focused match should rank ahead of the long, padded one; got {ids:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_model_ids_finds_by_file_name_only() {
+        let root = std::env::temp_dir().join(format!("trove_smi_file_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // Neither the model's own leaf folder nor any ancestor contains the query
+        // word — only the file name does. This is the exact gap the Library
+        // screen's client-side substring search can't cover on real (slim) data.
+        touch(&root.join("Assorted/Bits/gronkulator.stl"), 64);
+
+        let mut conn = crate::db::open(&root.join("smi.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        ).unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        rebuild_fts(&conn).unwrap();
+
+        let expected: String = conn
+            .query_row("SELECT model_id FROM files WHERE name='gronkulator.stl'", [], |r| r.get(0))
+            .unwrap();
+
+        let ids = search_model_ids_ranked(&conn, "gronkulator").unwrap();
+        assert_eq!(ids, vec![expected], "expected the file's owning model, got {ids:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_model_ids_dedupes_multiple_file_hits_on_the_same_model() {
+        let root = std::env::temp_dir().join(format!("trove_smi_dedup_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // Two files in the SAME model both match "dragon" — the model must
+        // appear exactly once in the result, not twice.
+        touch(&root.join("Creatures/Wyrm/dragon_head.stl"), 64);
+        touch(&root.join("Creatures/Wyrm/dragon_body.stl"), 64);
+
+        let mut conn = crate::db::open(&root.join("smi.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        ).unwrap();
+        let (models, _files) = persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(models, 1, "both files should group into one model");
+        rebuild_fts(&conn).unwrap();
+
+        let expected: String = conn.query_row("SELECT id FROM models LIMIT 1", [], |r| r.get(0)).unwrap();
+
+        let ids = search_model_ids_ranked(&conn, "dragon").unwrap();
+        assert_eq!(ids, vec![expected], "expected exactly one (deduped) id, got {ids:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_model_ids_preserves_rank_order() {
+        let root = std::env::temp_dir().join(format!("trove_smi_rank_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let conn = crate::db::open(&root.join("smi.db")).unwrap();
+        // Same short-vs-padded-long setup as `fts_rank_orders_by_relevance`: the
+        // best (rank-ordered) match must come first even though it was inserted
+        // — and so would sort first by rowid — last.
+        conn.execute(
+            "INSERT INTO search_fts (kind, ref_id, text) VALUES
+             ('folder','weak','Deeply Nested Container Folder With Many Extra Descriptive Words batman helmet padding padding padding padding'),
+             ('folder','strong','Batman Helmet')",
+            [],
+        ).unwrap();
+
+        let ids = search_model_ids_ranked(&conn, "batman helmet").unwrap();
+        assert_eq!(ids, vec!["strong".to_string(), "weak".to_string()],
+            "expected rank order (best match first), got {ids:?}");
 
         let _ = fs::remove_dir_all(&root);
     }
