@@ -11,6 +11,7 @@ import type { Filters, Model } from "../data/types";
 
 export function LibraryScreen() {
   const query = useApp((s) => s.query);
+  const searchIds = useApp((s) => s.searchIds);
   const fav = useApp((s) => s.fav);
   const onFav = useApp((s) => s.toggleFav);
   const nav = useApp((s) => s.nav);
@@ -20,8 +21,9 @@ export function LibraryScreen() {
   const [f, setF] = useState<Filters>(DEFAULT_FILTERS);
   const [showFilters, setShowFilters] = useState(true);
   // Memoized so an O(n) scan + sort over the whole library only re-runs when the
-  // dataset, query, or filters actually change — not on every unrelated re-render.
-  const results = useMemo(() => applyFilters(S.MODELS, query, f), [S.MODELS, query, f]);
+  // dataset, query, filters, or backend search results actually change — not on
+  // every unrelated re-render.
+  const results = useMemo(() => applyFilters(S.MODELS, query, f, searchIds), [S.MODELS, query, f, searchIds]);
   const onOpen = (m: Model) => nav({ name: "model", id: m.id });
 
   const activePills: [keyof Filters, string | boolean, string][] = [

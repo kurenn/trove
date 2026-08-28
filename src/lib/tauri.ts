@@ -43,6 +43,10 @@ export const api = {
     invoke<string>("save_thumb", { modelId, dataUrl, dimW: dim?.w ?? 0, dimD: dim?.d ?? 0, dimH: dim?.h ?? 0 }),
   /** Quick Find: backend FTS search over files + folders. */
   quickSearch: (query: string) => invoke<QuickResults>("quick_search", { query }),
+  /** Library/Search screens: model ids matching `query` via the same backend FTS
+      index, ranked best-first — lets the client-side filter (applyFilters) match
+      filenames without the slim grid payload shipping every filename. */
+  searchModelIds: (query: string) => invoke<string[]>("search_model_ids", { query }),
   getSetting: (key: string) => invoke<string | null>("get_setting", { key }),
   setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
   getQuickfindShortcut: () => invoke<string>("get_quickfind_shortcut"),

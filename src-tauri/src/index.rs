@@ -158,18 +158,36 @@ fn prettify(s: &str) -> String {
 }
 
 /// Generic, non-descriptive folder names creators commonly use to bucket a
-/// model's own files by export format or pipeline stage (`Batman Helmet/STLs/`,
-/// `Dungeon Wall Set/Tiles/`, `Prop/3MF/`, `Figure/Source/`…). None of these
-/// identify the model itself. List = the mesh/CAD file-format words a
-/// "one folder per format" export produces (stl/obj/3mf/step/mesh) plus the
-/// generic organizational nouns used for a folder that just holds model files
-/// (file/part/print/printable/model/source/output), each singular and plural.
+/// model's own files by export format, print-process, or pipeline stage
+/// (`Batman Helmet/STLs/`, `Dragon Bust/Presupported/`, `Prop/3MF/`,
+/// `Figure/Source/`…). None of these identify the model itself. List = the
+/// mesh/CAD file-format words a "one folder per format" export produces
+/// (stl/obj/3mf/step/mesh); the generic organizational nouns used for a folder
+/// that just holds model files (file/part/print/printable/model/source/output),
+/// each singular and plural; the support-state buckets ubiquitous in miniature
+/// releases (supported/unsupported/presupported/supports); slicer-project and
+/// output buckets (chitubox/gcode/sliced); and the FDM process bucket used
+/// when a creator ships both an FDM and a resin mesh for the same model.
 /// Matched case-insensitively, and after the same `_`/`-` → space normalization
-/// `prettify` uses, so `STLs`, `st_ls`-style spacing variants, etc. all match.
+/// `prettify` uses, so `STLs`, `st_ls`-style spacing variants, `Pre-Supported`,
+/// `pre_supported`, etc. all match via the single `"pre supported"` entry
+/// below — no separate hyphen/underscore variant entries are needed.
+///
+/// Deliberately NOT included: `resin` and `lys` (Lychee Slicer's project-file
+/// bucket) — both are ordinary words a creator could plausibly title a model
+/// or collection with (a lamp/glass piece called "Resin", a piece called
+/// "Lys" — Danish/Norwegian for "light"), and neither is required for
+/// tagging (the "resin" material tag already matches on the full folder path
+/// in `auto_tags`, independent of this list). `tiles` also stays out: unlike
+/// every word above, it names WHAT the models are (a set of dungeon/terrain
+/// tile pieces), not how/when they were exported — popping it would misname
+/// the tile set itself, replacing "Tiles" with its parent's name.
 const GENERIC_SEGMENTS: &[&str] = &[
     "stl", "stls", "obj", "objs", "3mf", "3mfs", "step", "stp", "mesh", "meshes",
     "file", "files", "part", "parts", "print", "prints", "printable", "printables",
     "model", "models", "source", "sources", "output", "outputs",
+    "supported", "unsupported", "presupported", "pre supported", "supports",
+    "chitubox", "gcode", "sliced", "fdm",
 ];
 
 /// Is this a generic bucket folder name (see `GENERIC_SEGMENTS`), not a
@@ -616,18 +634,29 @@ fn insert_record(conn: &Connection, lib_id: &str, rec: &ModelRecord) -> rusqlite
     Ok(())
 }
 
-/// Synchronous full scan into the given connection (one transaction). Used by
-/// tests; the live app uses `do_scan` (background, chunked).
+/// Synchronous full scan into the given connection (one transaction). Drives the
+/// SAME `collect_tree` + `group_models` phases the live incremental scanner
+/// (`do_scan`) uses, so this test helper can never disagree with production about
+/// what counts as a model (candidacy, container/nesting absorption, the
+/// printable-or-`.blend` rule — see `group_models`). Used by tests; the live app
+/// uses `do_scan` (background, chunked, incremental).
 #[allow(dead_code)]
 fn persist_scan(conn: &mut Connection, lib_id: &str, root: &Path) -> rusqlite::Result<(u32, u32)> {
     conn.execute("DELETE FROM models WHERE library_id = ?1", params![lib_id])?;
-    let never = AtomicBool::new(false);
-    let dirs = collect_model_dirs(root, &never, &mut |_| {});
+
+    let dirs = Arc::new(Mutex::new(BTreeMap::new()));
+    let d2 = dirs.clone();
+    let on_dir: Arc<dyn Fn(PathBuf, Vec<ScannedFile>, i64) + Send + Sync> =
+        Arc::new(move |p, f, m| { d2.lock().unwrap().insert(p, (f, m)); });
+    collect_tree(root, Arc::new(AtomicBool::new(false)), 4, on_dir);
+    let dirs = dirs.lock().unwrap().clone();
+    let grouped = group_models(root, &dirs);
+
     let mut models = 0u32;
     let mut files = 0u32;
     let tx = conn.transaction()?;
-    for (dir, fs) in dirs {
-        let rec = compute_record(root, &dir, mtime_secs(&dir), fs);
+    for gm in grouped {
+        let rec = compute_record(root, &gm.dir, gm.fingerprint, gm.files);
         files += rec.file_count;
         insert_record(&tx, lib_id, &rec)?;
         models += 1;
@@ -701,9 +730,11 @@ const WALK_THREADS: usize = 16;
 
 /// Bump when the scan/grouping logic changes so installed libraries rebuild once
 /// on the next scan (v2 = subtree model grouping; v3 = model display names walk
-/// up past a generic bucket leaf segment like `STLs`/`Tiles`, see
-/// `GENERIC_SEGMENTS`/`is_generic_segment`).
-const SCAN_VERSION: i64 = 3;
+/// up past a generic bucket leaf segment like `STLs`, see
+/// `GENERIC_SEGMENTS`/`is_generic_segment`; v4 = `GENERIC_SEGMENTS` widened to
+/// cover the support-state/slicer/process buckets common in miniature
+/// releases, e.g. `Presupported`/`Chitubox`/`FDM`).
+const SCAN_VERSION: i64 = 4;
 
 /// A message from a walker thread to the DB writer.
 /// (Retained for the `bench_walk` benchmark; the live scan uses `collect_tree`.)
@@ -2070,6 +2101,41 @@ fn fts_query(q: &str) -> String {
     }
 }
 
+/// Run a `search_fts` MATCH query, best match first, and return raw
+/// `(kind, ref_id)` rows. Shared by `quick_search` and `search_model_ids` —
+/// both need the same ranked (kind, ref_id) stream, just resolved into
+/// different shapes for their own callers.
+///
+/// `ref_id` is an untyped FTS5 `UNINDEXED` column: it's stored as whatever
+/// value was inserted (`rebuild_fts`) — a `models.id` TEXT for 'folder' rows,
+/// a `files.id` INTEGER for 'file' rows. Reading it with rusqlite's typed
+/// `get::<_, String>` does NOT coerce an INTEGER-stored value to text the way
+/// the raw SQLite C API's `sqlite3_column_text()` would — rusqlite's
+/// `ValueRef::as_str()` errors on a non-Text storage class — so a naive
+/// `SELECT ref_id` would make query_map return Err for every 'file' row, and
+/// `.flatten()` silently drops those: FTS file-name matches would vanish
+/// from every search, with no error surfaced anywhere. `CAST(ref_id AS TEXT)`
+/// forces the SQL-level conversion so both kinds always come back as an
+/// actual TEXT value. (Caught by index.rs test `search_model_ids_finds_by_file_name_only`,
+/// which is what this file-only-match path looks like without the cast.)
+///
+/// ORDER BY rank = FTS5's built-in bm25() relevance, best match first.
+/// Verified against this trigram table (see test `fts_rank_orders_by_relevance`,
+/// and scratch checks against a realistic set of rows) that bm25 behaves
+/// sensibly here even though the "terms" it scores are trigrams, not words:
+/// bm25 normalizes by document length, so among rows that all satisfy the
+/// AND'd phrases, one whose indexed text (name + folder path + tags) is short
+/// and mostly-the-match ranks above one where the same words are buried in a
+/// long path — a reasonable proxy for "prefer the model's own name over a
+/// deep path match" given `search_fts` stores one combined text blob per row
+/// (`rebuild_fts`) rather than separate name/path columns.
+fn fts_match_rows(conn: &Connection, q: &str, limit: u32) -> rusqlite::Result<Vec<(String, String)>> {
+    let m = fts_query(q);
+    let mut st = conn.prepare("SELECT kind, CAST(ref_id AS TEXT) FROM search_fts WHERE search_fts MATCH ?1 ORDER BY rank LIMIT ?2")?;
+    let rows = st.query_map(params![m, limit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    Ok(rows.flatten().collect())
+}
+
 #[tauri::command]
 pub fn quick_search(db: State<Db>, query: String) -> Result<QuickResults, String> {
     let q = query.trim().to_lowercase();
@@ -2086,39 +2152,17 @@ pub fn quick_search(db: State<Db>, query: String) -> Result<QuickResults, String
     // Trigram FTS needs ≥3 chars; fall back to LIKE for short queries.
     let use_fts = q.chars().count() >= 3;
     if use_fts {
-        let m = fts_query(&q);
         let mut fids: Vec<i64> = Vec::new();
         let mut mids: Vec<String> = Vec::new();
-        {
-            // ORDER BY rank = FTS5's built-in bm25() relevance, best match
-            // first. Verified against this trigram table (see index.rs test
-            // `fts_rank_orders_by_relevance`, and scratch checks against a
-            // realistic set of rows) that bm25 behaves sensibly here even
-            // though the "terms" it scores are trigrams, not words: bm25
-            // normalizes by document length, so among rows that all satisfy
-            // the AND'd phrases, one whose indexed text (name + folder path
-            // + tags) is short and mostly-the-match ranks above one where
-            // the same words are buried in a long path — a reasonable proxy
-            // for "prefer the model's own name over a deep path match"
-            // given `search_fts` stores one combined text blob per row
-            // (rebuild_fts) rather than separate name/path columns. Without
-            // this, LIMIT below returned an arbitrary 200 rows in rowid
-            // order and silently dropped the rest. 200 stays as the cap —
-            // Quick Find only ever shows the top 7 files + 5 folders, and
-            // now that the best matches sort first, 200 is just headroom,
-            // not the thing that decides which model shows up.
-            let mut st = conn
-                .prepare("SELECT kind, ref_id FROM search_fts WHERE search_fts MATCH ?1 ORDER BY rank LIMIT 200")
-                .map_err(|e| e.to_string())?;
-            let rows = st
-                .query_map(params![m], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                .map_err(|e| e.to_string())?;
-            for row in rows.flatten() {
-                if row.0 == "file" {
-                    if let Ok(id) = row.1.parse::<i64>() { fids.push(id); }
-                } else {
-                    mids.push(row.1);
-                }
+        // 200 stays as the cap — Quick Find only ever shows the top 7 files +
+        // 5 folders, and now that the best matches sort first (see
+        // `fts_match_rows`), 200 is just headroom, not the thing that decides
+        // which model shows up.
+        for (kind, ref_id) in fts_match_rows(&conn, &q, 200).map_err(|e| e.to_string())? {
+            if kind == "file" {
+                if let Ok(id) = ref_id.parse::<i64>() { fids.push(id); }
+            } else {
+                mids.push(ref_id);
             }
         }
         for id in fids.iter().take(7) {
@@ -2201,6 +2245,72 @@ fn collect_quick_folders(conn: &Connection, like: Option<&str>, out: &mut Vec<Qu
         if let Ok(f) = quick_folder_by_id(conn, &id) { out.push(f); }
     }
     Ok(())
+}
+
+/// Model ids matching `query`, ranked best-first, for the Library/Search/
+/// Collections screens (`applyFilters` in src/data/dataset.ts). Unlike
+/// `quick_search` (which returns display-ready rows split into a files list +
+/// a folders list for the launcher's two preview sections), this needs a
+/// single ordered list of model ids: the grid already holds the full slim
+/// `Model` records client-side (see `build_dataset`, which sends
+/// `files: Vec::new()`), it just can't search filenames locally because that
+/// field never ships in the slim payload. Routing filename search through
+/// this existing FTS index — instead of shipping every filename to the
+/// client — is what keeps the slim-payload perf work (v2.1.0) intact.
+///
+/// Reuses `search_fts`/`fts_query` exactly as `quick_search` does. `kind='file'`
+/// rows carry a `files.id`, resolved to its owning model below; `kind='folder'`
+/// rows already carry the model id directly. A model can surface via both its
+/// own folder-name hit and 1+ file-name hits, so ids are deduped, keeping each
+/// id's FIRST (best-ranked, since rows arrive `ORDER BY rank`) position.
+///
+/// Trigram FTS can't represent a word under 3 chars at all (see `fts_query`'s
+/// doc comment) — below that, `fts_query`'s own fallback phrase still can't
+/// tokenize and the query would just come back empty. The frontend therefore
+/// only calls this once the (trimmed) query is >=3 chars — the same `use_fts`
+/// threshold `quick_search` uses — and falls back to its existing client-side
+/// substring search (which still covers name/tags/creator/collection/folder,
+/// just not filenames) below that. The early return here is a defensive
+/// mirror of that same gate, not a path the UI is expected to hit.
+///
+/// Caps: reads up to 1000 ranked FTS rows — 5x `quick_search`'s 200, which
+/// only needs to fill a 7-file + 5-folder launcher preview; here every match
+/// feeds the grid, and dedup needs enough raw material to still reach a good
+/// count of unique models even when many hits collapse onto the same handful
+/// of models. The deduped result is capped at 500 unique ids: comfortably
+/// above the grid's own `>150 cards` virtualization threshold, so a query
+/// broad enough to still exceed it is better narrowed by the user than paged
+/// through — and it bounds this command's work independent of library size.
+fn search_model_ids_ranked(conn: &Connection, q: &str) -> rusqlite::Result<Vec<String>> {
+    if q.chars().count() < 3 {
+        return Ok(Vec::new());
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut ids: Vec<String> = Vec::new();
+    for (kind, ref_id) in fts_match_rows(conn, q, 1000)? {
+        let mid = if kind == "file" {
+            ref_id.parse::<i64>().ok().and_then(|fid| {
+                conn.query_row("SELECT model_id FROM files WHERE id=?1", params![fid], |r| r.get::<_, String>(0)).ok()
+            })
+        } else {
+            Some(ref_id)
+        };
+        if let Some(mid) = mid {
+            if seen.insert(mid.clone()) {
+                ids.push(mid);
+                if ids.len() >= 500 {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
+#[tauri::command]
+pub fn search_model_ids(db: State<Db>, query: String) -> Result<Vec<String>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    search_model_ids_ranked(&conn, query.trim().to_lowercase().as_str()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2434,6 +2544,46 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn miniature_bucket_folders_name_after_the_model_not_the_bucket() {
+        let root = std::env::temp_dir().join(format!("trove_minibucket_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        // The exact pattern this task targets: a support-state bucket one level
+        // below the real model name.
+        touch(&root.join("Creator/Dragon Bust/Presupported/bust.stl"), 64);
+        // Sibling FDM/resin process buckets for the same underlying model.
+        touch(&root.join("Creator/Elf Ranger/FDM/ranger.stl"), 64);
+        touch(&root.join("Creator/Elf Ranger/Resin/ranger_resin.stl"), 64);
+        // A slicer-project + sliced-output bucket pair.
+        touch(&root.join("Creator/Owlbear/ChiTuBox/owlbear.stl"), 64);
+        touch(&root.join("Creator/Owlbear/Sliced/owlbear.stl"), 64);
+        // A deliberately-excluded realistic name: a whole terrain set titled
+        // "Tiles" must keep its own name, not collapse into its parent.
+        touch(&root.join("Creator/Tiles/floor_01.stl"), 64);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        let names: Vec<&str> = ds.models.iter().map(|m| m.name.as_str()).collect();
+
+        assert!(names.contains(&"Dragon Bust"), "Presupported bucket must not steal the name, got {names:?}");
+        assert!(names.contains(&"Elf Ranger"), "FDM bucket must not steal the name, got {names:?}");
+        assert!(names.contains(&"Elf Ranger"), "Resin bucket must not steal the name, got {names:?}"); // both siblings collapse to the same model name
+        assert!(names.contains(&"Owlbear"), "ChiTuBox bucket must not steal the name, got {names:?}");
+        assert!(names.contains(&"Owlbear"), "Sliced bucket must not steal the name, got {names:?}");
+        // The excluded-word regression check: "Tiles" survives as its own name.
+        assert!(names.contains(&"Tiles"), "Tiles is a legitimate content name and must survive, got {names:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     // Gated benchmark: set TROVE_BENCH_DIR to a real folder to compare the serial
     // vs parallel walkers. Skips in normal `cargo test`.
     //   TROVE_BENCH_DIR="/path/to/your/model/library" cargo test bench_walk -- --nocapture
@@ -2577,12 +2727,10 @@ mod tests {
     fn fts_indexes_project_source_files_not_just_parts() {
         let root = std::env::temp_dir().join(format!("trove_blend_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        // NOTE: `persist_scan` (this test helper) walks via `collect_model_dirs`,
-        // which only recognizes a dir as a model when it holds a PRINTABLE file
-        // (unlike the live scanner's `group_models`, which also accepts a
-        // `.blend`-only dir via `is_model_file`). So pair the project file with a
-        // printable so the folder is grouped as a model at all — the point under
-        // test is that the .blend row itself (is_part=0) still gets indexed.
+        // Pair the project file with a printable — the point under test here is
+        // that the .blend row itself (is_part=0) still gets indexed alongside a
+        // part, not just that a `.blend`-only folder is recognized as a model at
+        // all (see `blend_only_folder_is_a_model_and_searchable` for that).
         touch(&root.join("Workshop/prop.stl"), 64);
         touch(&root.join("Workshop/scene_render.blend"), 64);
 
@@ -2612,6 +2760,48 @@ mod tests {
         let qf = quick_file_by_id(&conn, fid).unwrap();
         assert_eq!(qf.name, "scene_render.blend");
         assert_eq!(qf.ftype, "blend");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn blend_only_folder_is_a_model_and_searchable() {
+        // Regression test for v2.0.9: a folder holding ONLY a `.blend` file (no
+        // printable mesh) is still indexed as a model — `group_models`/
+        // `is_model_file` treat `.blend` as defining a model on its own. Before
+        // `persist_scan` was made to drive the real `collect_tree`/`group_models`
+        // phases, this test helper gated on `is_printable` only (via
+        // `collect_model_dirs`) and silently dropped the folder, so this case
+        // could never be exercised here even though production indexed it fine.
+        let root = std::env::temp_dir().join(format!("trove_blendonly_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        touch(&root.join("Workshop/scene_render.blend"), 64);
+
+        let mut conn = crate::db::open(&root.join("blendonly.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        ).unwrap();
+        let (models, files) = persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(models, 1, "a .blend-only folder must be indexed as a model");
+        assert_eq!(files, 1);
+
+        let ds = build_dataset(&conn).unwrap();
+        assert_eq!(ds.models.len(), 1);
+        let m = &ds.models[0];
+        assert_eq!(m.name, "Workshop");
+        assert!(m.file_types.contains(&"blend".to_string()), "file_types: {:?}", m.file_types);
+
+        // Findable in the FTS index by filename, same as the printable-paired case.
+        rebuild_fts(&conn).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_fts WHERE search_fts MATCH ?1",
+                params![fts_query("scene_render")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(n >= 1, "expected the .blend-only model's file to be findable by name, got {n}");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -2786,6 +2976,41 @@ mod tests {
         assert!(!is_generic_segment("Squirtle"));
     }
 
+    #[test]
+    fn generic_segment_matching_miniature_buckets() {
+        // Support-state buckets, ubiquitous in miniature/prop releases.
+        assert!(is_generic_segment("Supported"));
+        assert!(is_generic_segment("Unsupported"));
+        assert!(is_generic_segment("UNSUPPORTED"));
+        assert!(is_generic_segment("Supports"));
+        // "presupported" (solid) and "pre-supported"/"pre_supported" (hyphen/
+        // underscore, which normalize to a space like everything else) are
+        // different normalized strings and both need to match.
+        assert!(is_generic_segment("Presupported"));
+        assert!(is_generic_segment("Pre-Supported"));
+        assert!(is_generic_segment("pre_supported"));
+        assert!(is_generic_segment("Pre Supported"));
+        // Slicer-project / output / process buckets.
+        assert!(is_generic_segment("ChiTuBox"));
+        assert!(is_generic_segment("GCode"));
+        assert!(is_generic_segment("Sliced"));
+        assert!(is_generic_segment("FDM"));
+        // Underscore/dash spacing variants still normalize like prettify().
+        assert!(is_generic_segment("_Presupported_"));
+        assert!(is_generic_segment("-Sliced-"));
+        assert!(is_generic_segment("_FDM_"));
+
+        // Realistic model/collection names that were deliberately EXCLUDED must
+        // never be captured — capturing one would silently replace a correct
+        // name with its parent folder's, which is worse than the bug this list
+        // fixes. "Resin" and "Lys" are real, evocative words a creator could
+        // title a piece with; "Tiles" is the name of WHAT a terrain/dungeon
+        // tile set actually is, not an export bucket.
+        assert!(!is_generic_segment("Resin"), "a collection literally named Resin must survive");
+        assert!(!is_generic_segment("Lys"), "Lys (light, in Danish/Norwegian) is a plausible model title");
+        assert!(!is_generic_segment("Tiles"), "Tiles names the content of a terrain set, not a pipeline stage");
+    }
+
     // A real desktop's mountinfo: root ext4, a NAS reached through GVFS (how a
     // share actually shows up on Linux — `fuse.gvfsd-fuse`, never `cifs`), a
     // kernel CIFS mount, NFS, a local FUSE mount, and an escaped space.
@@ -2933,4 +3158,81 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn search_model_ids_finds_by_file_name_only() {
+        let root = std::env::temp_dir().join(format!("trove_smi_file_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // Neither the model's own leaf folder nor any ancestor contains the query
+        // word — only the file name does. This is the exact gap the Library
+        // screen's client-side substring search can't cover on real (slim) data.
+        touch(&root.join("Assorted/Bits/gronkulator.stl"), 64);
+
+        let mut conn = crate::db::open(&root.join("smi.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        ).unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        rebuild_fts(&conn).unwrap();
+
+        let expected: String = conn
+            .query_row("SELECT model_id FROM files WHERE name='gronkulator.stl'", [], |r| r.get(0))
+            .unwrap();
+
+        let ids = search_model_ids_ranked(&conn, "gronkulator").unwrap();
+        assert_eq!(ids, vec![expected], "expected the file's owning model, got {ids:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_model_ids_dedupes_multiple_file_hits_on_the_same_model() {
+        let root = std::env::temp_dir().join(format!("trove_smi_dedup_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // Two files in the SAME model both match "dragon" — the model must
+        // appear exactly once in the result, not twice.
+        touch(&root.join("Creatures/Wyrm/dragon_head.stl"), 64);
+        touch(&root.join("Creatures/Wyrm/dragon_body.stl"), 64);
+
+        let mut conn = crate::db::open(&root.join("smi.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        ).unwrap();
+        let (models, _files) = persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(models, 1, "both files should group into one model");
+        rebuild_fts(&conn).unwrap();
+
+        let expected: String = conn.query_row("SELECT id FROM models LIMIT 1", [], |r| r.get(0)).unwrap();
+
+        let ids = search_model_ids_ranked(&conn, "dragon").unwrap();
+        assert_eq!(ids, vec![expected], "expected exactly one (deduped) id, got {ids:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_model_ids_preserves_rank_order() {
+        let root = std::env::temp_dir().join(format!("trove_smi_rank_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let conn = crate::db::open(&root.join("smi.db")).unwrap();
+        // Same short-vs-padded-long setup as `fts_rank_orders_by_relevance`: the
+        // best (rank-ordered) match must come first even though it was inserted
+        // — and so would sort first by rowid — last.
+        conn.execute(
+            "INSERT INTO search_fts (kind, ref_id, text) VALUES
+             ('folder','weak','Deeply Nested Container Folder With Many Extra Descriptive Words batman helmet padding padding padding padding'),
+             ('folder','strong','Batman Helmet')",
+            [],
+        ).unwrap();
+
+        let ids = search_model_ids_ranked(&conn, "batman helmet").unwrap();
+        assert_eq!(ids, vec!["strong".to_string(), "weak".to_string()],
+            "expected rank order (best match first), got {ids:?}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
 }

@@ -16,6 +16,7 @@ type FlatItem =
 export function SearchModal() {
   const open = useApp((s) => s.searchOpen);
   const query = useApp((s) => s.query);
+  const searchIds = useApp((s) => s.searchIds);
   const setQuery = useApp((s) => s.setQuery);
   const setSearchOpen = useApp((s) => s.setSearchOpen);
   const nav = useApp((s) => s.nav);
@@ -26,7 +27,7 @@ export function SearchModal() {
   const [sel, setSel] = useState(0);
   const q = query.trim().toLowerCase();
 
-  const results = useMemo(() => (open ? applyFilters(S.MODELS, query, DEFAULT_FILTERS).slice(0, 7) : []), [open, query]);
+  const results = useMemo(() => (open ? applyFilters(S.MODELS, query, DEFAULT_FILTERS, searchIds).slice(0, 7) : []), [open, query, searchIds]);
   const creators = q ? S.CREATORS.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 3) : [];
   const collections = q ? S.COLLECTIONS.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 2) : [];
   const flat: FlatItem[] = [
