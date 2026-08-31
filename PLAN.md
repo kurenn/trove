@@ -124,3 +124,57 @@ pub fn render_stl_thumb(path: &std::path::Path, size: u32) -> Option<(image::Rgb
 None declared in CLAUDE.md. Closest risk is the **read-only guarantee** — this pass
 reads user files and writes only to `app_cache_dir`. Any write outside the cache dir
 is an automatic fail.
+
+---
+
+# AMENDMENT 1 — the stride was a planning error
+
+Phase 4 measured what `MAX_TRIS` stride sampling actually does. Keeping every Nth
+triangle without enlarging anything means the rasterizer paints ~`1/stride` of the
+silhouette:
+
+```
+   57,600 tris -> stride  1 -> 152,228 px = 100.0%  (reference)
+  360,000 tris -> stride  2 -> 114,314 px =  75.1%
+1,000,000 tris -> stride  6 ->  46,584 px =  30.6%
+6,760,000 tris -> stride 34 ->   8,926 px =   5.9%  <- the 335 MB file
+```
+
+The original plan's headline case renders as a stipple cloud. That violates CLAUDE.md
+("never a misleading shape") and fails this plan's own "cached preview" and "visual
+consistency" criteria. **The stride is withdrawn.**
+
+## Replacement approach
+
+A z-buffer is `O(size²)` — 512×512 — regardless of triangle count. Memory is bounded
+by the *raster target*, not the mesh, so no decimation is needed at all:
+
+- **≤ MAX_IN_MEMORY_TRIS (200_000)** — unchanged: read once, keep triangles in memory
+  (≤7 MB), compute bbox, rasterize. This is the common case (~975 of the 1,048 models).
+- **Above it** — two streaming passes over the file: pass 1 accumulates the bbox only
+  (no triangle retained), pass 2 re-reads and rasterizes straight into the z-buffer.
+  Peak memory is the framebuffer. Binary STL carries the count in its header, so the
+  path is chosen before any geometry is read.
+
+Roughly 73 models take the two-pass path and are read twice — a one-time index-time
+cost, and the correct trade against shipping unusable tiles. **Codex's bbox finding
+dissolves here**: the bbox now comes from every triangle by construction.
+
+## Amended acceptance criteria
+
+- [ ] No triangle decimation; every triangle contributes to both bbox and raster
+- [ ] Peak memory bounded by the framebuffer, not the mesh, for any input size
+- [ ] Silhouette coverage is size-independent: a mesh tessellated at ~57k and at ~1M
+      triangles renders within ~20% of the same non-background pixel count
+- [ ] `MAX_ASCII_LINE` genuinely bounds the read (`take(..).read_until(..)`, not a
+      length check after `read_line` has already grown the String)
+- [ ] The stale-write race is closed: the `UPDATE` is conditional on the row still
+      lacking a thumb
+- [ ] Supersample (render 2x, downscale) to match the webview's `antialias: true`
+
+## Deliberately not doing
+
+- **Per-part colour.** The rater noted `files.color` could be plumbed through. Skipped:
+  the webview path has generated zero thumbnails, so every tile on the grid is
+  Rust-generated and a uniform neutral gray is already self-consistent. Revisit only if
+  the OBJ fallback starts producing coloured tiles beside these.

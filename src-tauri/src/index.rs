@@ -1292,11 +1292,21 @@ fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<Atom
         // slow step here, and the db mutex is global (held across it would
         // freeze the whole app for the rest of the library).
         if let Some((img, dims)) = thumbgen::render_stl_thumb(Path::new(&path), 512) {
+            // Rendering a large mesh can take a while with no lock held (by
+            // design — see above); a newer scan may have superseded this one
+            // and already written a thumb for this model in the meantime.
+            // Recheck cancellation before writing anything, and make the
+            // UPDATE itself conditional on the row still lacking a thumb so a
+            // slow, now-stale render can't clobber a newer one either way.
+            if cancel.load(Ordering::SeqCst) {
+                break;
+            }
             let out = dir.join(format!("{id}.jpg"));
             if img.save(&out).is_ok() {
                 if let Ok(conn) = db.0.lock() {
                     let _ = conn.execute(
-                        "UPDATE models SET thumb=?2, dim_w=?3, dim_d=?4, dim_h=?5 WHERE id=?1",
+                        "UPDATE models SET thumb=?2, dim_w=?3, dim_d=?4, dim_h=?5
+                         WHERE id=?1 AND (thumb IS NULL OR thumb='')",
                         params![id, out.to_string_lossy().to_string(), dims.w, dims.d, dims.h],
                     );
                 }
