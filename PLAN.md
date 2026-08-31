@@ -221,3 +221,73 @@ risk 7, security risk 9, plan fidelity 9. **Gate FAIL** (overall 7.7, coverage 6
 - `stl_thumb_candidates`' BTreeMap dedup — expressible as `MIN(f.size) ... GROUP BY`,
   but it mirrors the sibling embedded pass, and code-fit wins.
 - Dark-theme tile background (JPEG forces opaque; siblings are opaque too).
+
+---
+
+# FINAL STATUS — gate not met, no blocking defect
+
+Fix-round cap (2) spent. Final scores after `7a1a23c`:
+
+| axis | r1 | r2 | r3 |
+|---|---|---|---|
+| correctness | 5 | 8 | **9** |
+| simplicity | 8 | 7 | **8** |
+| test coverage | 4 | 6 | **7** |
+| naming | 9 | 8 | **8** |
+| performance risk | 6 | 7 | **7** |
+| security risk | 8 | 9 | **9** |
+| plan fidelity | 7 | 9 | **9** |
+
+**Overall 8.14 — gate requires 8.5. Every individual axis clears its ≥7 bar.**
+
+## What is blocking
+
+Nothing functional. The rater found **no blocking defect** and mutation-tested the
+round-2 fixes to confirm they are real: deleting the blank guard, the dimension clamp,
+the binary cancel check, or the conditional SQL each makes a test fail. The gate fails
+on the aggregate average, not on a bug.
+
+What holds the score down is **test-coverage debt**, three surviving mutants:
+
+1. Both cancel rechecks in `render_stl_thumb` (`thumbgen.rs:138`, `:148`) can be deleted
+   with the suite still green — the test reaches `None` via `stream_bbox` first.
+2. `stream_ascii`'s cancel check (`thumbgen.rs:285`) is untested; only binary is.
+3. `read_bounded_line`'s malformed-line rejection (`thumbgen.rs:253`) is untested —
+   nothing exercises a >4096-byte line. (The *memory* bound is structural via `take`,
+   so AMENDMENT 1's criterion holds regardless.)
+
+Plus the integration test **duplicates** the production UPDATE string (`index.rs:3395`
+vs `:1308`) instead of sharing it, so the guard could drift back to unconditional
+without failing.
+
+## Codex's [high], raised three rounds running — judged LOW, deferred
+
+The stale-file overwrite requires a superseding scan to complete a full tree walk,
+persist, and republish the same model inside the ~1 ms the old scan spends encoding one
+JPEG — while `ScanFlags::fresh` (`index.rs:25-33`) sets the old scan's cancel flag
+*before* the new walk starts, and `index.rs:1301` rechecks it immediately before
+`img.save()`. The partial-write angle is real but unobservable for a new thumbnail:
+the webview only learns the path after `models.thumb` is written, which is after
+`img.save()` returns.
+
+Decisive: this pattern is **pre-existing and repo-wide**. `write_scaled`
+(`index.rs:1378`) and `save_thumb` (`index.rs:2068`) both save non-atomically. Fixing it
+only in the new pass would leave two siblings unfixed — it belongs in its own PR.
+
+## Known cosmetic gap
+
+Rust fits the mesh to its bbox corners at `FILL = 0.86`; the webview uses a fixed
+perspective camera with no fit. A sphere fills ~58% of a Rust tile vs ~76% of a webview
+tile. Rust's framing is arguably better (nothing clips), the webview has produced zero
+STL thumbnails on the real library so nothing sits beside them, and per CLAUDE.md it
+cannot be headless-verified. This is why plan fidelity is 9, not 10.
+
+## Ranked follow-ups
+
+1. Extract `persist_stl_thumb(conn, id, out, dims)` so the test shares the production
+   UPDATE instead of duplicating it (~10 lines; closes the drift gap).
+2. One `write_atomic` helper (temp + rename) routed through `write_scaled`,
+   `save_thumb`, and the STL pass — closes Codex's finding in all three places.
+3. Pixel budget in `draw_tri` instead of the triangle counter, plus tests for
+   `stream_ascii` cancellation and a >4096-byte ASCII line — kills the three surviving
+   mutants and Codex's [medium] together.
