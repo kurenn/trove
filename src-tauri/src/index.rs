@@ -1291,7 +1291,7 @@ fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<Atom
         // Render with NO db lock held — parsing/rasterizing a large mesh is the
         // slow step here, and the db mutex is global (held across it would
         // freeze the whole app for the rest of the library).
-        if let Some((img, dims)) = thumbgen::render_stl_thumb(Path::new(&path), 512) {
+        if let Some((img, dims)) = thumbgen::render_stl_thumb(Path::new(&path), 512, cancel) {
             // Rendering a large mesh can take a while with no lock held (by
             // design — see above); a newer scan may have superseded this one
             // and already written a thumb for this model in the meantime.
@@ -3374,7 +3374,7 @@ mod tests {
         assert_eq!(candidates[0].0, id);
 
         // Render step (NOT db-locked in the real pass).
-        let (img, dims) = thumbgen::render_stl_thumb(Path::new(&candidates[0].1), 512)
+        let (img, dims) = thumbgen::render_stl_thumb(Path::new(&candidates[0].1), 512, &AtomicBool::new(false))
             .expect("valid binary STL should render");
         assert!(
             dims.w > 0 && dims.d > 0 && dims.h > 0,
@@ -3387,9 +3387,13 @@ mod tests {
         let out = cache.join(format!("{id}.jpg"));
         img.save(&out).unwrap();
 
-        // Persist step (db re-locked only for this UPDATE).
+        // Persist step (db re-locked only for this UPDATE) — the SAME
+        // conditional SQL the real pass uses (index.rs ~1309): the UPDATE
+        // only fires while the row still lacks a thumb, so a slow render from
+        // a scan that's since been superseded can't clobber a fresher one.
         conn.execute(
-            "UPDATE models SET thumb=?2, dim_w=?3, dim_d=?4, dim_h=?5 WHERE id=?1",
+            "UPDATE models SET thumb=?2, dim_w=?3, dim_d=?4, dim_h=?5
+             WHERE id=?1 AND (thumb IS NULL OR thumb='')",
             params![id, out.to_string_lossy().to_string(), dims.w, dims.d, dims.h],
         ).unwrap();
 
@@ -3398,6 +3402,24 @@ mod tests {
             .unwrap();
         assert_eq!(thumb.as_deref(), Some(out.to_string_lossy().as_ref()));
         assert!(out.exists(), "jpg thumbnail should be written to the cache dir");
+
+        // The guard itself: a second render for the same model (e.g. a
+        // stale/superseded scan finishing late) must be a no-op once thumb
+        // is already set — the row keeps the FIRST value, never the second.
+        let other = cache.join(format!("{id}-other.jpg"));
+        fs::write(&other, b"not a real jpg, just needs to exist on disk").unwrap();
+        conn.execute(
+            "UPDATE models SET thumb=?2, dim_w=?3, dim_d=?4, dim_h=?5
+             WHERE id=?1 AND (thumb IS NULL OR thumb='')",
+            params![id, other.to_string_lossy().to_string(), 999i64, 999i64, 999i64],
+        ).unwrap();
+        let thumb_after: Option<String> = conn
+            .query_row("SELECT thumb FROM models WHERE id=?1", params![id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            thumb_after.as_deref(), Some(out.to_string_lossy().as_ref()),
+            "conditional UPDATE must be a no-op once thumb is already set — got {thumb_after:?}"
+        );
 
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&cache);

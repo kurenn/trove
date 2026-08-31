@@ -178,3 +178,46 @@ dissolves here**: the bbox now comes from every triangle by construction.
   the webview path has generated zero thumbnails, so every tile on the grid is
   Rust-generated and a uniform neutral gray is already self-consistent. Revisit only if
   the OBJ fallback starts producing coloured tiles beside these.
+
+---
+
+# AMENDMENT 2 — final round
+
+Round 2 rating: correctness 8, simplicity 7, test coverage 6, naming 8, performance
+risk 7, security risk 9, plan fidelity 9. **Gate FAIL** (overall 7.7, coverage 6 < 7).
+
+## Blocking
+
+1. **A blank render is persisted permanently.** `render_stl_thumb` returns `Some` for
+   any mesh with `max_dim > 1e-6` even when nothing was drawn — every triangle
+   sub-pixel or off-frame, which one stray far-away vertex produces. The pass writes a
+   blank JPEG and sets `models.thumb`; both the Rust candidate query and `requestThumb`
+   key off `thumb` being set, so it is unrecoverable. Violates "never a misleading
+   shape". Guard: return `None` when the raster is uniformly background.
+2. **The `VmHWM` memory assertion cannot fail.** It samples a since-process-start
+   high-water mark *after* the test already peaked at ~88 MB building its fixture, so
+   the 43 MB regression it names can never move it. Round 1 was failed for a vacuous
+   assertion; do not ship another. Delete it or make it real.
+3. **The conditional `UPDATE` added in round 1 is executed by no test.** The existing
+   integration test runs a plain unconditional UPDATE instead.
+
+## Also taking (deletions and one-liners)
+
+4. **Collapse the dual path.** `detect` has no length field for ASCII so it calls
+   `count_ascii_vertices` — a full streaming read — purely to choose a path. Real reads
+   today: binary 1/2, **ASCII 2/3**. The dual path saves a read only for small binary
+   and costs ASCII a third pass over SMB. Always-stream deletes `count_ascii_vertices`,
+   `read_all`, `read_stl`, `bbox`, `MAX_IN_MEMORY_TRIS`, and the branch — ~60-70 lines.
+5. `read_bounded_line`'s doc contract is backwards: `Some(None)` **is** the EOF signal,
+   bare `None` is the error case.
+6. Infinite coordinates saturate to `u32::MAX` in `dim_w/d/h` — clamp.
+7. Bound the raster loop (Codex [high], rated medium-low): thread the cancel flag into
+   the render and check periodically, so an eject actually stops it.
+
+## Explicitly deferred to a follow-up PR
+
+- The thumbnail-**file** race (row is protected; window is microseconds between two
+  deterministic renders; orphan case shared with the sibling passes).
+- `stl_thumb_candidates`' BTreeMap dedup — expressible as `MIN(f.size) ... GROUP BY`,
+  but it mirrors the sibling embedded pass, and code-fit wins.
+- Dark-theme tile background (JPEG forces opaque; siblings are opaque too).

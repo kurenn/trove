@@ -31,6 +31,7 @@ use image::{Rgb, RgbImage};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Bounding-box dimensions in model units, rounded — matches what the webview
 /// stores via `save_thumb` (w = x, d = z, h = y).
@@ -40,18 +41,6 @@ pub struct Dims {
     pub h: u32,
 }
 
-/// Meshes at or below this triangle count are read once into memory (kept as
-/// a `Vec<Tri>`, a few MB at most) and rasterized directly — the common case.
-/// Above it, the file is streamed twice instead: pass 1 computes only the
-/// bounding box (no triangle retained), pass 2 re-reads and rasterizes
-/// straight into the z-buffer. Either way peak memory is bounded by the
-/// framebuffer, not the mesh — a z-buffer is O(size²) regardless of triangle
-/// count, so there is no need to decimate triangles at all. (An earlier
-/// version strided the triangle set down above this threshold; that made
-/// large meshes render as a stipple of scattered facets instead of a filled
-/// silhouette — see PLAN.md AMENDMENT 1.)
-const MAX_IN_MEMORY_TRIS: usize = 200_000;
-
 /// A single line in an ASCII STL is never legitimately this long. `take(..)`
 /// actually bounds the read (rather than checking length after `read_line`
 /// has already grown the buffer without limit), so an unterminated/malformed
@@ -60,6 +49,21 @@ const MAX_ASCII_LINE: u64 = 4096;
 
 /// Render at 2x `size` and downscale — matches the webview's `antialias: true`.
 const SUPERSAMPLE: u32 = 2;
+
+/// Sanity bound for a rendered dimension, in the file's own units. Malformed
+/// or adversarial input (e.g. an ASCII "vertex inf 0 0", or a coordinate a
+/// few orders of magnitude too large) can push a bbox extent far past any
+/// plausible model size; `as u32` would otherwise saturate an infinite (or
+/// merely huge) extent straight to a nonsensical `4294967295` baked into the
+/// DB. Real models are nowhere near this size, so clamp instead of trusting
+/// the cast.
+const MAX_DIM_UNITS: f32 = 1_000_000.0;
+
+/// How often (in triangles) the streaming parsers re-check the cancel flag.
+/// Frequent enough that ejecting a library while a large mesh is rendering
+/// stops it within a fraction of a second; infrequent enough that it's not
+/// an atomic load per triangle.
+const CANCEL_CHECK_EVERY: usize = 64_000;
 
 #[derive(Clone, Copy)]
 struct V3 {
@@ -103,42 +107,50 @@ enum Format {
 }
 
 /// Read an STL (binary or ASCII) and rasterize a shaded `size`x`size` preview.
-/// Streams the file; a mesh over `MAX_IN_MEMORY_TRIS` never has its triangles
-/// held in memory — see that constant's doc. Returns `None` for unreadable/
-/// empty/degenerate meshes.
-pub fn render_stl_thumb(path: &Path, size: u32) -> Option<(RgbImage, Dims)> {
+/// Always two streaming passes over the file, however small: pass 1
+/// (`stream_bbox`) folds the bounding box without retaining any triangle,
+/// pass 2 re-reads and rasterizes straight into the z-buffer. Peak memory is
+/// bounded by the framebuffer, not the mesh — a z-buffer is O(size²)
+/// regardless of triangle count, so no triangle Vec is ever held for any
+/// input size. (An earlier version kept small meshes in memory as a one-read
+/// fast path and strided large meshes down instead; the stride made big
+/// meshes render as a stipple of scattered facets rather than a filled
+/// silhouette — see PLAN.md AMENDMENT 1 — and the in-memory fast path only
+/// ever saved a read for small *binary* files while costing ASCII files a
+/// third pass, so it was dropped too — see AMENDMENT 2.)
+///
+/// `cancel` is checked periodically during both passes (see
+/// `CANCEL_CHECK_EVERY`); if it's set, the render is abandoned and `None` is
+/// returned rather than persisting a partial image. Also returns `None` for
+/// unreadable/empty/degenerate meshes, or for a render that drew nothing at
+/// all (every triangle sub-pixel or off-frame, which one stray far-away
+/// vertex is enough to cause) — a blank tile must never be cached, since
+/// nothing ever re-derives a thumbnail once `models.thumb` is set.
+pub fn render_stl_thumb(path: &Path, size: u32, cancel: &AtomicBool) -> Option<(RgbImage, Dims)> {
     if size == 0 {
         return None;
     }
-    let (fmt, count) = detect(path)?;
-    if count == 0 {
-        return None;
-    }
+    let fmt = detect(path)?;
     let render_size = size.saturating_mul(SUPERSAMPLE);
 
-    let (img, dims) = if count > MAX_IN_MEMORY_TRIS {
-        // Two streaming passes, no triangle Vec retained at any point.
-        let (min, max) = stream_bbox(path, fmt)?;
-        let (dims, frame, mut img, mut depth) = setup(min, max, render_size)?;
-        let file = File::open(path).ok()?;
-        let draw = |t: Tri| draw_tri(&mut img, &mut depth, render_size, &frame, t);
-        match fmt {
-            Format::Binary => stream_binary(file, draw)?,
-            Format::Ascii => stream_ascii(file, draw)?,
-        }
-        (img, dims)
-    } else {
-        let tris = read_all(path, fmt)?;
-        if tris.is_empty() {
-            return None;
-        }
-        let (min, max) = bbox(&tris);
-        let (dims, frame, mut img, mut depth) = setup(min, max, render_size)?;
-        for &t in &tris {
-            draw_tri(&mut img, &mut depth, render_size, &frame, t);
-        }
-        (img, dims)
-    };
+    let (min, max) = stream_bbox(path, fmt, cancel)?;
+    if cancel.load(Ordering::SeqCst) {
+        return None; // bbox pass was cut short — don't render from a partial box
+    }
+    let (dims, frame, mut img, mut depth) = setup(min, max, render_size)?;
+    let file = File::open(path).ok()?;
+    let draw = |t: Tri| draw_tri(&mut img, &mut depth, render_size, &frame, t);
+    match fmt {
+        Format::Binary => stream_binary(file, draw, cancel)?,
+        Format::Ascii => stream_ascii(file, draw, cancel)?,
+    }
+    if cancel.load(Ordering::SeqCst) {
+        return None; // raster pass was cut short — don't persist a partial image
+    }
+
+    if img.pixels().all(|p| *p == BG) {
+        return None; // nothing was actually drawn — never cache a blank tile
+    }
 
     let img = if render_size == size {
         img
@@ -150,12 +162,14 @@ pub fn render_stl_thumb(path: &Path, size: u32) -> Option<(RgbImage, Dims)> {
 
 // ── STL parsing ─────────────────────────────────────────────────────────────
 
-/// Detect format + triangle count without reading any geometry. Binary iff
-/// `file_len == 84 + count*50` (80-byte header + u32 count, read up front) —
-/// NOT by sniffing a leading "solid", which binary files can carry too. ASCII
-/// carries no length field, so its count comes from a lightweight streaming
-/// vertex-count pass instead.
-fn detect(path: &Path) -> Option<(Format, usize)> {
+/// Detect format without reading any geometry. Binary iff `file_len == 84 +
+/// count*50` (80-byte header + u32 count, read up front) — NOT by sniffing a
+/// leading "solid", which binary files can carry too. Anything else is
+/// treated as ASCII (including too-short and garbage files — those fail to
+/// parse a single triangle out of `stream_ascii`/`stream_bbox` downstream and
+/// surface as `None` from `render_stl_thumb`, same as any other unreadable
+/// input).
+fn detect(path: &Path) -> Option<Format> {
     let mut file = File::open(path).ok()?;
     let file_len = file.metadata().ok()?.len();
     let mut header = [0u8; 84];
@@ -163,35 +177,19 @@ fn detect(path: &Path) -> Option<(Format, usize)> {
         // header[80..84] is always exactly 4 bytes — try_into can't fail here.
         let count = u32::from_le_bytes(header[80..84].try_into().unwrap());
         if file_len == 84 + count as u64 * 50 {
-            return Some((Format::Binary, count as usize));
+            return Some(Format::Binary);
         }
     }
-    let count = count_ascii_vertices(path)? / 3;
-    Some((Format::Ascii, count))
-}
-
-/// Read every triangle in the file into memory (used by the in-memory render
-/// path and by tests).
-fn read_all(path: &Path, fmt: Format) -> Option<Vec<Tri>> {
-    let file = File::open(path).ok()?;
-    let mut tris = Vec::new();
-    match fmt {
-        Format::Binary => stream_binary(file, |t| tris.push(t))?,
-        Format::Ascii => stream_ascii(file, |t| tris.push(t))?,
-    }
-    Some(tris)
-}
-
-/// Detect format then read every triangle into memory in one call.
-#[cfg(test)]
-fn read_stl(path: &Path) -> Option<Vec<Tri>> {
-    let (fmt, _count) = detect(path)?;
-    read_all(path, fmt)
+    Some(Format::Ascii)
 }
 
 /// Stream the file once, calling `f` per triangle without retaining any, and
-/// fold the world-space bounding box.
-fn stream_bbox(path: &Path, fmt: Format) -> Option<(V3, V3)> {
+/// fold the world-space bounding box. `cancel` is forwarded to the streaming
+/// parser, which checks it periodically; a bbox folded from a cancelled read
+/// is only ever partial, so callers must recheck `cancel` themselves before
+/// trusting it (see `render_stl_thumb`) — `stream_bbox` can't tell "stopped
+/// early" apart from "the file only had this many triangles".
+fn stream_bbox(path: &Path, fmt: Format, cancel: &AtomicBool) -> Option<(V3, V3)> {
     let file = File::open(path).ok()?;
     let mut min = V3 { x: f32::MAX, y: f32::MAX, z: f32::MAX };
     let mut max = V3 { x: f32::MIN, y: f32::MIN, z: f32::MIN };
@@ -204,8 +202,8 @@ fn stream_bbox(path: &Path, fmt: Format) -> Option<(V3, V3)> {
         }
     };
     match fmt {
-        Format::Binary => stream_binary(file, acc)?,
-        Format::Ascii => stream_ascii(file, acc)?,
+        Format::Binary => stream_binary(file, acc, cancel)?,
+        Format::Ascii => stream_ascii(file, acc, cancel)?,
     };
     if any { Some((min, max)) } else { None }
 }
@@ -213,14 +211,19 @@ fn stream_bbox(path: &Path, fmt: Format) -> Option<(V3, V3)> {
 /// Streaming binary parse: 50 bytes/triangle (u16 attr byte-count trailer read
 /// and discarded, never interpreted). Calls `f` once per triangle without
 /// retaining any — `BufReader`, never `read_to_end`. A truncated file yields
-/// whatever was streamed before the cut.
-fn stream_binary<F: FnMut(Tri)>(file: File, mut f: F) -> Option<()> {
+/// whatever was streamed before the cut; cancellation (checked every
+/// `CANCEL_CHECK_EVERY` triangles) does too — the caller distinguishes the
+/// two by rechecking `cancel` itself afterward.
+fn stream_binary<F: FnMut(Tri)>(file: File, mut f: F, cancel: &AtomicBool) -> Option<()> {
     let mut r = BufReader::new(file);
     let mut header = [0u8; 84];
     r.read_exact(&mut header).ok()?;
     let count = u32::from_le_bytes(header[80..84].try_into().ok()?) as usize;
     let mut buf = [0u8; 50];
-    for _ in 0..count {
+    for i in 0..count {
+        if i % CANCEL_CHECK_EVERY == 0 && cancel.load(Ordering::SeqCst) {
+            break;
+        }
         if r.read_exact(&mut buf).is_err() {
             break; // truncated file — use what was streamed so far
         }
@@ -235,8 +238,11 @@ fn stream_binary<F: FnMut(Tri)>(file: File, mut f: F) -> Option<()> {
 }
 
 /// Read one line, bounded to `MAX_ASCII_LINE` bytes via `BufRead::take` — the
-/// read itself is capped, not just checked after the fact. `None` at true EOF
-/// with nothing left to read; `Some(None)` never occurs, only used internally.
+/// read itself is capped, not just checked after the fact. `Some(None)` is
+/// the EOF signal (nothing left to read). Bare `None` means the line was
+/// malformed instead — the bound was hit without a line terminator, or the
+/// bytes weren't valid UTF-8 — and callers treat that as a parse failure,
+/// not as end-of-input.
 fn read_bounded_line(r: &mut BufReader<File>) -> Option<Option<String>> {
     let mut buf = Vec::new();
     let n = r.by_ref().take(MAX_ASCII_LINE).read_until(b'\n', &mut buf).ok()?;
@@ -250,10 +256,13 @@ fn read_bounded_line(r: &mut BufReader<File>) -> Option<Option<String>> {
 }
 
 /// Streaming line-oriented ASCII parse over `BufReader`. Calls `f` once per
-/// completed triangle without retaining any.
-fn stream_ascii<F: FnMut(Tri)>(file: File, mut f: F) -> Option<()> {
+/// completed triangle without retaining any; see `stream_binary` for the
+/// cancellation/truncation contract (same: a partial result is possible, the
+/// caller distinguishes it from a genuinely short file by rechecking `cancel`).
+fn stream_ascii<F: FnMut(Tri)>(file: File, mut f: F, cancel: &AtomicBool) -> Option<()> {
     let mut r = BufReader::new(file);
     let mut verts: Vec<V3> = Vec::with_capacity(3);
+    let mut tris_seen = 0usize;
     loop {
         let line = match read_bounded_line(&mut r)? {
             Some(l) => l,
@@ -272,39 +281,13 @@ fn stream_ascii<F: FnMut(Tri)>(file: File, mut f: F) -> Option<()> {
         if verts.len() == 3 {
             f([verts[0], verts[1], verts[2]]);
             verts.clear();
+            tris_seen += 1;
+            if tris_seen % CANCEL_CHECK_EVERY == 0 && cancel.load(Ordering::SeqCst) {
+                break;
+            }
         }
     }
     Some(())
-}
-
-/// Streaming pass over an ASCII file: count `vertex` lines (÷3 = triangle
-/// count) so the caller can choose the in-memory vs. streaming path before
-/// touching any geometry.
-fn count_ascii_vertices(path: &Path) -> Option<usize> {
-    let mut r = BufReader::new(File::open(path).ok()?);
-    let mut n = 0usize;
-    loop {
-        let line = match read_bounded_line(&mut r)? {
-            Some(l) => l,
-            None => break,
-        };
-        if line.split_whitespace().next().map(|t| t.eq_ignore_ascii_case("vertex")) == Some(true) {
-            n += 1;
-        }
-    }
-    Some(n)
-}
-
-fn bbox(tris: &[Tri]) -> (V3, V3) {
-    let mut min = tris[0][0];
-    let mut max = tris[0][0];
-    for t in tris {
-        for v in t {
-            min.x = min.x.min(v.x); min.y = min.y.min(v.y); min.z = min.z.min(v.z);
-            max.x = max.x.max(v.x); max.y = max.y.max(v.y); max.z = max.z.max(v.z);
-        }
-    }
-    (min, max)
 }
 
 // ── camera (fixed — see module doc for how these were derived) ─────────────
@@ -391,9 +374,9 @@ fn setup(min: V3, max: V3, size: u32) -> Option<(Dims, Frame, RgbImage, Vec<f32>
         return None;
     }
     let dims = Dims {
-        w: extent.x.max(0.0).round() as u32,
-        d: extent.z.max(0.0).round() as u32,
-        h: extent.y.max(0.0).round() as u32,
+        w: extent.x.max(0.0).min(MAX_DIM_UNITS).round() as u32,
+        d: extent.z.max(0.0).min(MAX_DIM_UNITS).round() as u32,
+        h: extent.y.max(0.0).min(MAX_DIM_UNITS).round() as u32,
     };
     let frame = compute_frame(min, max, max_dim, size);
     let img = RgbImage::from_pixel(size, size, BG);
@@ -537,20 +520,6 @@ mod tests {
         writeln!(f, "endsolid test").unwrap();
     }
 
-    /// Peak resident set size (kB) since process start, from `/proc/self/status`.
-    /// Linux-only (dev/CI env for this task); used only as a coarse memory
-    /// growth signal, not exact accounting.
-    #[cfg(target_os = "linux")]
-    fn vm_hwm_kb() -> u64 {
-        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
-        for line in status.lines() {
-            if let Some(rest) = line.strip_prefix("VmHWM:") {
-                return rest.trim().trim_end_matches("kB").trim().parse().unwrap_or(0);
-            }
-        }
-        0
-    }
-
     #[test]
     fn binary_cube_parses_expected_tris_and_dims() {
         let dir = std::env::temp_dir().join(format!("trove-thumbgen-test-{}", std::process::id()));
@@ -560,10 +529,11 @@ mod tests {
         assert_eq!(tris.len(), 12);
         write_binary_stl(&path, &tris);
 
-        let parsed = read_stl(&path).unwrap();
-        assert_eq!(parsed.len(), 12);
+        let mut parsed = 0usize;
+        stream_binary(File::open(&path).unwrap(), |_| parsed += 1, &AtomicBool::new(false)).unwrap();
+        assert_eq!(parsed, 12);
 
-        let (_img, dims) = render_stl_thumb(&path, 64).unwrap();
+        let (_img, dims) = render_stl_thumb(&path, 64, &AtomicBool::new(false)).unwrap();
         assert_eq!((dims.w, dims.h, dims.d), (2, 3, 4)); // w=x, h=y, d=z
         let _ = std::fs::remove_file(&path);
     }
@@ -578,8 +548,8 @@ mod tests {
         write_binary_stl(&bin_path, &tris);
         write_ascii_stl(&ascii_path, &tris);
 
-        let (_bin_img, bin_dims) = render_stl_thumb(&bin_path, 64).unwrap();
-        let (_ascii_img, ascii_dims) = render_stl_thumb(&ascii_path, 64).unwrap();
+        let (_bin_img, bin_dims) = render_stl_thumb(&bin_path, 64, &AtomicBool::new(false)).unwrap();
+        let (_ascii_img, ascii_dims) = render_stl_thumb(&ascii_path, 64, &AtomicBool::new(false)).unwrap();
         assert_eq!((bin_dims.w, bin_dims.d, bin_dims.h), (ascii_dims.w, ascii_dims.d, ascii_dims.h));
         let _ = std::fs::remove_file(&bin_path);
         let _ = std::fs::remove_file(&ascii_path);
@@ -592,7 +562,7 @@ mod tests {
         let path = dir.join("cube.stl");
         write_binary_stl(&path, &cube_tris());
 
-        let (img, _dims) = render_stl_thumb(&path, 128).unwrap();
+        let (img, _dims) = render_stl_thumb(&path, 128, &AtomicBool::new(false)).unwrap();
         let drawn = img.pixels().any(|p| *p != BG);
         assert!(drawn, "expected at least one non-background pixel");
         let _ = std::fs::remove_file(&path);
@@ -610,6 +580,22 @@ mod tests {
     ///
     /// Must fail against the old stride code (coverage collapses at the high
     /// density) and pass after removing it.
+    ///
+    /// This test used to also assert a `VmHWM` delta stayed under a bound, as
+    /// a check that the streaming path never retained a triangle `Vec` for
+    /// the 1M-tri mesh. That assertion was vacuous: `VmHWM` is a
+    /// since-process-start high-water mark, and building this test's own
+    /// fixtures (a 1M-tri `Vec` plus a ~50 MB write buffer, see
+    /// `write_binary_stl`) already peaked well above any bound sampled
+    /// *after* — a real regression could never move it. It's deleted rather
+    /// than patched: after AMENDMENT 2 collapsed the dual (in-memory /
+    /// streaming) path down to a single always-streaming implementation (see
+    /// `render_stl_thumb`), there is no in-memory-fast-path branch left that
+    /// a future change could silently reintroduce — retaining a triangle Vec
+    /// again would mean rewriting `render_stl_thumb`'s structure, not
+    /// tweaking a threshold. A genuinely isolated memory measurement would
+    /// need subprocess isolation (VmHWM is process-wide and monotonic); not
+    /// worth it for a regression the code shape itself now rules out.
     #[test]
     fn coverage_is_size_independent_across_tessellation_density() {
         let dir = std::env::temp_dir().join(format!("trove-thumbgen-test-sphere-{}", std::process::id()));
@@ -618,8 +604,9 @@ mod tests {
         let big_path = dir.join("sphere_1m.stl");
 
         // Same sphere (radius 1, centered at the origin), two tessellation
-        // densities: 57,600 tris (well under MAX_IN_MEMORY_TRIS -> in-memory
-        // path) and 1,000,000 tris (well over -> two-pass streaming path).
+        // densities: 57,600 and 1,000,000 tris. Both now take the same
+        // always-streaming path (see `render_stl_thumb`); this test exercises
+        // it at two very different triangle counts.
         let small = uv_sphere(120, 240, 1.0);
         assert_eq!(small.len(), 57_600);
         let big = uv_sphere(500, 1000, 1.0);
@@ -629,26 +616,8 @@ mod tests {
         drop(small);
         drop(big);
 
-        #[cfg(target_os = "linux")]
-        let hwm_before = vm_hwm_kb();
-
-        let (small_img, _) = render_stl_thumb(&small_path, 128).expect("small sphere should render");
-        let (big_img, _) = render_stl_thumb(&big_path, 128).expect("big sphere should render");
-
-        #[cfg(target_os = "linux")]
-        {
-            let grew_kb = vm_hwm_kb().saturating_sub(hwm_before);
-            // A retained Vec<Tri> for the 1M-triangle mesh would be ~36 MB
-            // (36 bytes/tri); the streaming path's only sustained allocation
-            // is the framebuffer + z-buffer (a few hundred KB at this size).
-            // Comfortably under that bound means no triangle Vec was kept
-            // around for the big mesh.
-            assert!(
-                grew_kb < 20_000,
-                "peak RSS grew {grew_kb} kB rendering both spheres — looks like \
-                 the streaming path retained a triangle Vec (a 1M-tri Vec is ~36 MB)"
-            );
-        }
+        let (small_img, _) = render_stl_thumb(&small_path, 128, &AtomicBool::new(false)).expect("small sphere should render");
+        let (big_img, _) = render_stl_thumb(&big_path, 128, &AtomicBool::new(false)).expect("big sphere should render");
 
         let non_bg = |img: &RgbImage| img.pixels().filter(|p| **p != BG).count();
         let small_px = non_bg(&small_img);
@@ -674,10 +643,113 @@ mod tests {
         let path = dir.join("garbage.stl");
         std::fs::write(&path, b"not an stl file at all, just some bytes\x00\x01\x02").unwrap();
 
-        assert!(render_stl_thumb(&path, 64).is_none());
+        assert!(render_stl_thumb(&path, 64, &AtomicBool::new(false)).is_none());
 
         // Also: a nonexistent path must not panic.
-        assert!(render_stl_thumb(&dir.join("does-not-exist.stl"), 64).is_none());
+        assert!(render_stl_thumb(&dir.join("does-not-exist.stl"), 64, &AtomicBool::new(false)).is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// B1 (PLAN.md AMENDMENT 2, round 2): a mesh whose bbox is real but whose
+    /// raster is empty must return `None`, not a blank image. A single
+    /// zero-area (two coincident vertices) triangle reproduces this exactly:
+    /// its two far-apart x values give `setup` a non-degenerate bbox, but
+    /// `draw_tri`'s screen-space area check skips it, so nothing is ever
+    /// drawn — the same failure mode as "one stray far-away vertex" in a
+    /// real mesh (a huge bbox from one outlier shrinks everything else to
+    /// sub-pixel). Before the fix this returned `Some` with an all-background
+    /// image, which the index pass would then cache forever (nothing
+    /// re-derives a thumbnail once `models.thumb` is set).
+    #[test]
+    fn blank_raster_returns_none_not_a_blank_image() {
+        let dir = std::env::temp_dir().join(format!("trove-thumbgen-test-blank-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("degenerate.stl");
+        let degenerate: Tri = [
+            V3 { x: 0.0, y: 0.0, z: 0.0 },
+            V3 { x: 0.0, y: 0.0, z: 0.0 }, // coincident with the first — zero-area edge
+            V3 { x: 4.0, y: 0.0, z: 0.0 },
+        ];
+        write_binary_stl(&path, &[degenerate]);
+
+        assert!(
+            render_stl_thumb(&path, 64, &AtomicBool::new(false)).is_none(),
+            "a mesh that rasterizes to nothing but background must return None, not a blank image"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// B6: an extreme (here infinite) bbox extent must clamp to
+    /// `MAX_DIM_UNITS`, not saturate through `as u32` straight to
+    /// `u32::MAX`. Tests `setup` directly rather than going through
+    /// `render_stl_thumb`, since an infinite extent also collapses the
+    /// camera scale to 0 and typically blanks the whole raster (correctly
+    /// triggering the B1 guard above) — this isolates the dims computation
+    /// itself instead of relying on that interaction.
+    #[test]
+    fn extreme_bbox_extent_clamps_instead_of_saturating() {
+        let min = V3 { x: 0.0, y: 0.0, z: 0.0 };
+        let max = V3 { x: f32::INFINITY, y: 5.0, z: 1.0e10 };
+        let (dims, ..) = setup(min, max, 64).expect("a non-degenerate bbox should still set up");
+        assert!(dims.w <= MAX_DIM_UNITS as u32, "w={} should be clamped to MAX_DIM_UNITS", dims.w);
+        assert!(dims.d <= MAX_DIM_UNITS as u32, "d={} should be clamped to MAX_DIM_UNITS", dims.d);
+        assert_eq!(dims.h, 5, "a normal finite extent should pass through untouched");
+        assert_ne!(dims.w, u32::MAX, "an infinite extent must not saturate straight to u32::MAX");
+    }
+
+    /// B7: a render started with `cancel` already set must bail out (and
+    /// return `None`) rather than complete and hand back a result — this is
+    /// the end-to-end wiring an eject relies on.
+    #[test]
+    fn render_bails_out_when_already_cancelled() {
+        let dir = std::env::temp_dir().join(format!("trove-thumbgen-test-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cube.stl");
+        write_binary_stl(&path, &cube_tris());
+
+        let cancel = AtomicBool::new(true);
+        assert!(
+            render_stl_thumb(&path, 64, &cancel).is_none(),
+            "a render with cancel already set must bail out rather than complete"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// B7: `stream_binary`'s periodic check (every `CANCEL_CHECK_EVERY`
+    /// triangles) actually stops the read partway through a large mesh, not
+    /// just at the very first check. Cancellation is requested from inside
+    /// the triangle callback itself, right as the count crosses the first
+    /// check boundary, and the parser must stop there rather than reading
+    /// the remaining triangles.
+    #[test]
+    fn stream_binary_stops_mid_stream_when_cancelled() {
+        let dir = std::env::temp_dir().join(format!("trove-thumbgen-test-cancelmid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("many.stl");
+        let tris = uv_sphere(200, 200, 1.0); // 80,000 tris, > CANCEL_CHECK_EVERY
+        assert!(tris.len() > CANCEL_CHECK_EVERY);
+        write_binary_stl(&path, &tris);
+
+        let cancel = AtomicBool::new(false);
+        let mut seen = 0usize;
+        stream_binary(
+            File::open(&path).unwrap(),
+            |_| {
+                seen += 1;
+                if seen == CANCEL_CHECK_EVERY {
+                    cancel.store(true, Ordering::SeqCst);
+                }
+            },
+            &cancel,
+        )
+        .unwrap();
+
+        assert_eq!(
+            seen, CANCEL_CHECK_EVERY,
+            "should stop exactly at the next periodic check after cancellation is requested, \
+             not read the rest of the {} triangles",
+            tris.len()
+        );
         let _ = std::fs::remove_file(&path);
     }
 }
