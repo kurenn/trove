@@ -3,6 +3,7 @@
 
 use crate::db::Db;
 use crate::model::*;
+use crate::thumbgen;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::cell::Cell;
@@ -1272,7 +1273,88 @@ fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<Atom
     if emb > 0 {
         let _ = app.emit("dataset-changed", ());
     }
-    eprintln!("[scan] {lib_id}: cached {done} folder-image + {emb} embedded thumbnails");
+
+    // STL-render pass: models still without a cached preview but with a workable
+    // STL part → rasterize it directly in Rust at index time (streaming, memory-
+    // bounded — see thumbgen). This replaces the webview fallback for STL, which
+    // had to fetch() the whole mesh over the network share to render one; OBJ
+    // still falls back to the webview.
+    let stl_candidates = match db.0.lock() {
+        Ok(conn) => stl_thumb_candidates(&conn, lib_id),
+        Err(_) => Vec::new(),
+    };
+    let mut stl = 0u32;
+    for (id, path) in stl_candidates {
+        if cancel.load(Ordering::SeqCst) {
+            break;
+        }
+        // Render with NO db lock held — parsing/rasterizing a large mesh is the
+        // slow step here, and the db mutex is global (held across it would
+        // freeze the whole app for the rest of the library).
+        if let Some((img, dims)) = thumbgen::render_stl_thumb(Path::new(&path), 512, cancel) {
+            // Rendering a large mesh can take a while with no lock held (by
+            // design — see above); a newer scan may have superseded this one
+            // and already written a thumb for this model in the meantime.
+            // Recheck cancellation before writing anything, and make the
+            // UPDATE itself conditional on the row still lacking a thumb so a
+            // slow, now-stale render can't clobber a newer one either way.
+            if cancel.load(Ordering::SeqCst) {
+                break;
+            }
+            let out = dir.join(format!("{id}.jpg"));
+            if img.save(&out).is_ok() {
+                if let Ok(conn) = db.0.lock() {
+                    let _ = conn.execute(
+                        "UPDATE models SET thumb=?2, dim_w=?3, dim_d=?4, dim_h=?5
+                         WHERE id=?1 AND (thumb IS NULL OR thumb='')",
+                        params![id, out.to_string_lossy().to_string(), dims.w, dims.d, dims.h],
+                    );
+                }
+                stl += 1;
+                if stl % 24 == 0 {
+                    let _ = app.emit("dataset-changed", ());
+                    emit_progress(app, lib_id, 0, done + emb + stl, false, false, "previews", 0);
+                }
+            }
+        }
+    }
+    if stl > 0 {
+        let _ = app.emit("dataset-changed", ());
+    }
+    eprintln!("[scan] {lib_id}: cached {done} folder-image + {emb} embedded + {stl} STL-rendered thumbnails");
+}
+
+/// One STL candidate per model still missing a cached preview: the smallest
+/// `is_part` STL file belonging to it. Deliberately matches `workablePart` in
+/// `src/three/thumbs.ts` (which also picks the smallest STL/OBJ part) so the
+/// Rust pass and the webview fallback never pick different meshes for the same
+/// model.
+fn stl_thumb_candidates(conn: &Connection, lib_id: &str) -> Vec<(String, String)> {
+    let rows: Vec<(String, String, i64)> = conn
+        .prepare(
+            "SELECT m.id, f.path, f.size FROM models m
+             JOIN files f ON f.model_id = m.id
+             WHERE m.library_id=?1 AND (m.thumb IS NULL OR m.thumb='')
+               AND f.type='stl' AND f.is_part=1",
+        )
+        .and_then(|mut st| {
+            st.query_map(params![lib_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+            })
+            .map(|rs| rs.flatten().collect())
+        })
+        .unwrap_or_default();
+    let mut by_model: BTreeMap<String, (String, i64)> = BTreeMap::new();
+    for (id, path, size) in rows {
+        match by_model.get_mut(&id) {
+            Some(e) if size < e.1 => *e = (path, size),
+            Some(_) => {}
+            None => {
+                by_model.insert(id, (path, size));
+            }
+        }
+    }
+    by_model.into_iter().map(|(id, (path, _size))| (id, path)).collect()
 }
 
 /// Decode an image, shrink so the longest side ≤ `max`, and write a JPEG.
@@ -2342,6 +2424,33 @@ mod tests {
         fs::write(p, vec![0u8; bytes]).unwrap();
     }
 
+    // Writes a tiny but valid (non-planar, non-degenerate) binary STL — a
+    // 4-triangle tetrahedron — so thumbgen::render_stl_thumb has real triangle
+    // data to parse and rasterize.
+    fn write_binary_stl(p: &Path) {
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let tris: [[[f32; 3]; 3]; 4] = [
+            [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]],
+            [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 0.0, 10.0]],
+            [[0.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]],
+            [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]],
+        ];
+        let mut bytes = vec![0u8; 80]; // header
+        bytes.extend_from_slice(&(tris.len() as u32).to_le_bytes());
+        for tri in &tris {
+            for _ in 0..3 {
+                bytes.extend_from_slice(&0f32.to_le_bytes()); // normal (unused by the parser)
+            }
+            for v in tri {
+                for c in v {
+                    bytes.extend_from_slice(&c.to_le_bytes());
+                }
+            }
+            bytes.extend_from_slice(&[0u8; 2]); // attribute byte count
+        }
+        fs::write(p, bytes).unwrap();
+    }
+
     // Run the live collector + grouper over a temp tree (mirrors do_scan phases 1–2).
     fn group(root: &Path) -> Vec<GroupedModel> {
         let dirs = std::sync::Arc::new(std::sync::Mutex::new(BTreeMap::new()));
@@ -3233,6 +3342,87 @@ mod tests {
             "expected rank order (best match first), got {ids:?}");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stl_render_pass_populates_thumb_and_writes_jpg() {
+        // Exercises the same query + render + persist steps the third pass in
+        // generate_image_thumbs runs (that pass itself needs a live AppHandle,
+        // which none of these tests construct — see the other tests in this
+        // module for the same convention).
+        let root = std::env::temp_dir().join(format!("trove_stlthumb_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_binary_stl(&root.join("Creatures/Wyrm/body.stl"));
+
+        let mut conn = crate::db::open(&root.join("stl.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        ).unwrap();
+        let (models, _files) = persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(models, 1, "expected one model");
+
+        let id: String = conn.query_row("SELECT id FROM models LIMIT 1", [], |r| r.get(0)).unwrap();
+        let before: Option<String> = conn
+            .query_row("SELECT thumb FROM models WHERE id=?1", params![id], |r| r.get(0))
+            .unwrap();
+        assert!(before.is_none(), "no thumb before the render pass");
+
+        // Query step (db-locked in the real pass) — must pick the model's STL.
+        let candidates = stl_thumb_candidates(&conn, "lib");
+        assert_eq!(candidates.len(), 1, "one STL candidate, got {candidates:?}");
+        assert_eq!(candidates[0].0, id);
+
+        // Render step (NOT db-locked in the real pass).
+        let (img, dims) = thumbgen::render_stl_thumb(Path::new(&candidates[0].1), 512, &AtomicBool::new(false))
+            .expect("valid binary STL should render");
+        assert!(
+            dims.w > 0 && dims.d > 0 && dims.h > 0,
+            "expected a non-degenerate bbox, got w={} d={} h={}", dims.w, dims.d, dims.h
+        );
+
+        let cache = std::env::temp_dir().join(format!("trove_stlthumb_cache_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&cache);
+        fs::create_dir_all(&cache).unwrap();
+        let out = cache.join(format!("{id}.jpg"));
+        img.save(&out).unwrap();
+
+        // Persist step (db re-locked only for this UPDATE) — the SAME
+        // conditional SQL the real pass uses (index.rs ~1309): the UPDATE
+        // only fires while the row still lacks a thumb, so a slow render from
+        // a scan that's since been superseded can't clobber a fresher one.
+        conn.execute(
+            "UPDATE models SET thumb=?2, dim_w=?3, dim_d=?4, dim_h=?5
+             WHERE id=?1 AND (thumb IS NULL OR thumb='')",
+            params![id, out.to_string_lossy().to_string(), dims.w, dims.d, dims.h],
+        ).unwrap();
+
+        let thumb: Option<String> = conn
+            .query_row("SELECT thumb FROM models WHERE id=?1", params![id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(thumb.as_deref(), Some(out.to_string_lossy().as_ref()));
+        assert!(out.exists(), "jpg thumbnail should be written to the cache dir");
+
+        // The guard itself: a second render for the same model (e.g. a
+        // stale/superseded scan finishing late) must be a no-op once thumb
+        // is already set — the row keeps the FIRST value, never the second.
+        let other = cache.join(format!("{id}-other.jpg"));
+        fs::write(&other, b"not a real jpg, just needs to exist on disk").unwrap();
+        conn.execute(
+            "UPDATE models SET thumb=?2, dim_w=?3, dim_d=?4, dim_h=?5
+             WHERE id=?1 AND (thumb IS NULL OR thumb='')",
+            params![id, other.to_string_lossy().to_string(), 999i64, 999i64, 999i64],
+        ).unwrap();
+        let thumb_after: Option<String> = conn
+            .query_row("SELECT thumb FROM models WHERE id=?1", params![id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            thumb_after.as_deref(), Some(out.to_string_lossy().as_ref()),
+            "conditional UPDATE must be a no-op once thumb is already set — got {thumb_after:?}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&cache);
     }
 
 }

@@ -4,6 +4,7 @@ mod db;
 mod index;
 mod model;
 mod quickfind;
+mod thumbgen;
 mod watch;
 
 use db::Db;
