@@ -4,6 +4,10 @@ All notable changes to Trove. This project uses [semantic versioning](https://se
 The section for each version becomes that version's GitHub release notes.
 
 ## [Unreleased]
+### Added
+- **Models without a photo now get a real 3D preview, generated while indexing.** Previously a model whose folder had no image and no embedded thumbnail showed a blank tile, and only got a preview if you happened to scroll to its card — which meant downloading the whole mesh over the network, two at a time, and never retrying if that failed. On a 4,800-model library on a NAS, that path had produced **zero** previews and left over a thousand models blank. Previews are now rendered natively during indexing, straight from the STL, and cached like every other thumbnail. In testing this filled in 1,036 previously blank models in about 18 minutes.
+- **Model dimensions come from the preview.** Width, depth and height are measured while the preview is rendered, so cards and detail show real sizes without opening the model.
+
 ### Fixed
 - **Search finds what you meant.** Six separate defects in how models are indexed and searched:
   - **Quick Find now matches your words in any order.** It quoted your whole query as one phrase, so "helmet batman" found nothing while "batman helmet" worked. The library search already did this; the two now agree.

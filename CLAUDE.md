@@ -7,6 +7,9 @@ modifying, uploading, or downloading the user's files — and shows them in an i
 
 Public: **github.com/kurenn/trove** · site **trove.spoolr.io** · MIT.
 
+**Before changing architecture, read `docs/decisions.md`** — what was decided, why,
+and what was rejected. Made a call that closes off an alternative? Add an entry.
+
 ## Commands
 ```bash
 npm install
