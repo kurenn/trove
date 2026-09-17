@@ -3,7 +3,7 @@
 All notable changes to Trove. This project uses [semantic versioning](https://semver.org).
 The section for each version becomes that version's GitHub release notes.
 
-## [Unreleased]
+## [2.2.0]
 ### Added
 - **Models without a photo now get a real 3D preview, generated while indexing.** Previously a model whose folder had no image and no embedded thumbnail showed a blank tile, and only got a preview if you happened to scroll to its card — which meant downloading the whole mesh over the network, two at a time, and never retrying if that failed. On a 4,800-model library on a NAS, that path had produced **zero** previews and left over a thousand models blank. Previews are now rendered natively during indexing, straight from the STL, and cached like every other thumbnail. In testing this filled in 1,036 previously blank models in about 18 minutes.
 - **A one-time "Reindex" prompt after updating.** The improved model names and the new 3D previews only apply once a library is rescanned, so right after this update Trove shows a notice for each library indexed by an older version, with a **Reindex now** button. It disappears on its own once the reindex finishes — you'll only see it again if a future update changes how libraries are indexed. Large or network libraries can take a while; previews fill in as it goes.
