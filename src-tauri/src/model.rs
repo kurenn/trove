@@ -149,6 +149,11 @@ pub struct Library {
     pub files: u32,
     pub status: String,
     pub last: String,
+    /// Indexed by an older `SCAN_VERSION` (or never finished a scan), so its rows
+    /// predate the current grouping/naming rules until it's reindexed. Drives the
+    /// one-time "reindex" notice; clears itself when the next full scan completes.
+    #[serde(default)]
+    pub stale: bool,
 }
 
 // ── Quick Find launcher results ──────────────────────────────────────────────

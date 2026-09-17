@@ -16,6 +16,7 @@ import { StorageScreen } from "./screens/Storage";
 import { SettingsScreen } from "./screens/Settings";
 import { SetupWizard } from "./screens/Setup";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { ReindexBanner } from "./components/ReindexBanner";
 import { modelById } from "./data/dataset";
 import { useApp, inkFor } from "./lib/store";
 import { isTauri } from "./lib/tauri";
@@ -142,6 +143,14 @@ export default function App() {
     // Dev-only: preview the sidebar indexing indicator (?scan=scanning|previews).
     const sc = p.get("scan");
     if (sc) useApp.setState({ scan: { libId: "dev", phase: sc, files: 1240, models: 86 } });
+    // Dev-only: preview the one-time reindex notice with N out-of-date libraries (?stale=1|2).
+    const st = Number(p.get("stale"));
+    if (st > 0) useApp.setState({
+      libraries: ["NAS Models", "Desktop Prints", "Miniatures"].slice(0, st).map((name, i) => ({
+        id: `dev${i}`, name, type: "local" as const, path: `/models/${i}`, models: 4790, files: 118827,
+        status: "idle" as const, last: "2 weeks ago", stale: true,
+      })),
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -191,6 +200,7 @@ export default function App() {
         <div className="main-col">
           <Topbar />
           <UpdateBanner />
+          <ReindexBanner />
           <div className="content" ref={contentRef}><Screen /></div>
         </div>
       </div>

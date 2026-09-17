@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { applyFilters, isReal, partCount, fileCount } from "./dataset";
+import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex } from "./dataset";
 import { useApp } from "../lib/store";
 import { DEFAULT_FILTERS, type Filters, type Model, type GeometryKey, type Library } from "./types";
 
@@ -238,5 +238,17 @@ describe("slim-payload fallbacks", () => {
     expect(partCount(model({ partsCount: undefined, parts: [{ id: "p", name: "p", geometry: "vase", color: "#000", files: [] }] }))).toBe(1);
     expect(fileCount(model({ fileCount: 5, files: [] }))).toBe(5);
     expect(fileCount(model({ fileCount: undefined, files: [{ name: "a", type: "stl", size: 1 }] }))).toBe(1);
+  });
+});
+
+describe("librariesNeedingReindex", () => {
+  it("returns only stale libraries that aren't already scanning", () => {
+    const libs = [
+      library({ id: "old", stale: true, status: "idle" }),
+      library({ id: "busy", stale: true, status: "scanning" }),
+      library({ id: "fresh", stale: false, status: "watching" }),
+      library({ id: "mock" }), // mock/browser rows carry no flag at all
+    ];
+    expect(librariesNeedingReindex(libs).map((l) => l.id)).toEqual(["old"]);
   });
 });

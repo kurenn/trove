@@ -1709,10 +1709,13 @@ fn list_libs(conn: &Connection) -> rusqlite::Result<Vec<Library>> {
     let mut stmt = conn.prepare(
         "SELECT l.id, l.name, l.type, l.path, l.status, l.last,
             (SELECT COUNT(*) FROM models m WHERE m.library_id=l.id),
-            (SELECT COALESCE(SUM(m.file_count),0) FROM models m WHERE m.library_id=l.id)
+            (SELECT COALESCE(SUM(m.file_count),0) FROM models m WHERE m.library_id=l.id),
+            -- Same marker do_scan checks to force its one-time rebuild: a missing
+            -- or older scan_version means this library's rows are out of date.
+            COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key='scan_version:'||l.id), 0) != ?1
          FROM libraries l ORDER BY l.name",
     )?;
-    let rows = stmt.query_map([], |r| {
+    let rows = stmt.query_map(params![SCAN_VERSION], |r| {
         Ok(Library {
             id: r.get(0)?,
             name: r.get(1)?,
@@ -1722,6 +1725,7 @@ fn list_libs(conn: &Connection) -> rusqlite::Result<Vec<Library>> {
             last: r.get(5)?,
             models: r.get::<_, i64>(6)? as u32,
             files: r.get::<_, i64>(7)? as u32,
+            stale: r.get(8)?,
         })
     })?;
     rows.collect()
@@ -2489,6 +2493,47 @@ mod tests {
         let sq = models.iter().find(|g| file_name(&g.dir) == "Squirtle").unwrap();
         assert_eq!(sq.files.iter().filter(|f| is_printable(&f.ext)).count(), 2);
         assert!(pick_preview(&sq.files).unwrap().ends_with("front.jpg"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn library_is_stale_until_scanned_with_the_current_scan_version() {
+        let root = std::env::temp_dir().join(format!("trove_test_stale_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        let stale = |conn: &Connection| list_libs(conn).unwrap()[0].stale;
+        let mark = |conn: &Connection, v: String| {
+            conn.execute(
+                "INSERT INTO settings (key,value) VALUES ('scan_version:lib',?1) ON CONFLICT(key) DO UPDATE SET value=?1",
+                params![v],
+            )
+            .unwrap();
+        };
+
+        // Never finished a scan (no marker) — out of date.
+        assert!(stale(&conn), "a library with no scan_version marker must be stale");
+        // Scanned by an older release — the upgrade case the notice exists for.
+        mark(&conn, (SCAN_VERSION - 1).to_string());
+        assert!(stale(&conn), "an older scan_version must be stale");
+        // A completed scan on this version clears it.
+        mark(&conn, SCAN_VERSION.to_string());
+        assert!(!stale(&conn), "the current scan_version must not be stale");
+        // The marker is per library: a second, never-scanned library is still stale.
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib2','U','local','/x','idle','')",
+            [],
+        )
+        .unwrap();
+        let libs = list_libs(&conn).unwrap();
+        assert!(!libs.iter().find(|l| l.id == "lib").unwrap().stale);
+        assert!(libs.iter().find(|l| l.id == "lib2").unwrap().stale);
 
         let _ = fs::remove_dir_all(&root);
     }

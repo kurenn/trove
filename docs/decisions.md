@@ -22,6 +22,29 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
+## 2026-09-17 — After an update that changes indexing, prompt a reindex; never auto-rescan
+
+**Decision:** each library reports `stale` when its stored `scan_version:{id}` marker
+differs from `SCAN_VERSION`, and a banner offers **Reindex now** for those libraries.
+The notice clears itself when a full scan writes the current marker.
+**Because:** naming, grouping and preview changes only apply on a rescan, and no scan
+runs at startup — so an upgraded user saw none of 2.2.0's headline changes and had no
+way to know why. Keying on the marker (the same one `do_scan` uses to force its rebuild)
+makes the notice exact: fresh installs and already-reindexed libraries never see it, a
+cancelled or failed reindex leaves it up, and every future `SCAN_VERSION` bump reuses it
+with no new code.
+**Rejected:** auto-rescanning stale libraries at startup — on a network share that is an
+unrequested ~40-minute walk plus a preview pass, started the moment the app opens.
+Also rejected: keying on the app version (a "what's new" flag) — it shows the notice to
+people with nothing to reindex and can't tell whether they already did.
+**Unsure about:** the copy names this release's changes ("previews and model names"), so
+it needs updating on the next `SCAN_VERSION` bump. Several stale libraries are reindexed
+concurrently, as Settings → Reindex everything already does, which can load a single NAS.
+**Affects:** `list_libs`, `Library.stale`, `ReindexBanner.tsx`, and every future
+`SCAN_VERSION` bump.
+
+---
+
 ## 2026-08-31 — Thumbnails are generated natively at index time, not rendered lazily in the webview
 
 **Decision:** the Rust scan rasterizes STL previews as a third pass in

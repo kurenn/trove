@@ -3,7 +3,7 @@
    the current snapshot via the store, so they stay valid as data swaps. */
 
 import { useApp } from "../lib/store";
-import type { Dataset, Model, Filters, GeometryKey } from "./types";
+import type { Dataset, Model, Filters, GeometryKey, Library } from "./types";
 
 /** Reactive hook — re-renders when the dataset changes (mock → Rust index). */
 export const useDataset = (): Dataset => useApp((s) => s.data);
@@ -144,4 +144,10 @@ export function modelDims(m: { volume?: number; geometry: GeometryKey; dimW?: nu
   const asp = DIM_ASPECT[m.geometry] || [1, 1, 1];
   const r = (x: number) => Math.round(base * x);
   return { w: r(asp[0]), d: r(asp[1]), h: r(asp[2]) };
+}
+
+/** Libraries whose index predates the current scan version and aren't already
+    being rescanned — what the one-time reindex notice asks the user to refresh. */
+export function librariesNeedingReindex(libraries: Library[]): Library[] {
+  return libraries.filter((l) => l.stale && l.status !== "scanning");
 }
