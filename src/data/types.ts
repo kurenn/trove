@@ -150,6 +150,9 @@ export interface Library {
   last: string;
   /** internal: remembers the status to restore after a rescan. */
   _prev?: LibStatus;
+  /** Indexed by an older scan version, so it needs one reindex to pick up the
+      current naming/grouping/previews. Clears when the next full scan completes. */
+  stale?: boolean;
 }
 
 export interface ScanOptions {

@@ -87,6 +87,9 @@
 .update-banner .ub-btn:hover { filter: brightness(1.05); }
 .update-banner .ub-x { border: none; background: none; color: var(--ink-3); cursor: pointer; display: inline-flex; padding: 4px; border-radius: 6px; }
 .update-banner .ub-x:hover { background: var(--surface-2); color: var(--ink); }
+/* --accent-soft stays a light tint in both themes (it's set inline from Tweaks), so
+   --ink text on it is unreadable in dark mode. Give the strip a dark surface there. */
+[data-theme="dark"] .update-banner { background: var(--surface-2); }
 
 /* modal dialog (new collection, etc.) */
 .modal-scrim { position: fixed; inset: 0; z-index: 200; background: rgba(20,14,8,.42); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 24px; }
