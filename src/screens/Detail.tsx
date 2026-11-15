@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import { Icon, Avatar, Tag } from "../components/Icons";
 import { Thumb, Viewer3D, type ViewerMode } from "../three/Viewer";
 import { MiniCard } from "../components/cards";
-import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels } from "../data/dataset";
+import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel, versionFiles, type SlicerId } from "../data/dataset";
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
-import { isTauri, revealInManager, copyText } from "../lib/tauri";
-import type { Creator, Model, ModelFile } from "../data/types";
+import { isTauri, api, revealInManager, copyText, loadConvert } from "../lib/tauri";
+import type { Creator, Library, Model, ModelFile, PrintStatus, Plate } from "../data/types";
 
 const UNKNOWN_CREATOR: Creator = { id: "", name: "Unknown", handle: "", models: 0, blurb: "", tone: "var(--ink-3)" };
 
@@ -25,7 +25,31 @@ export function DetailScreen({ model }: { model: Model }) {
   const fav = useApp((s) => s.fav);
   const onFav = useApp((s) => s.toggleFav);
   const toast = useApp((s) => s.toast);
+  const setPrintStatus = useApp((s) => s.setPrintStatus);
+  // Rename = a display name in the index; the files keep theirs. null = not editing.
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  useEffect(() => { setNameDraft(null); }, [model.id]);
+  const saveName = async () => {
+    const next = (nameDraft ?? "").trim();
+    setNameDraft(null);
+    if (next === m.name) return;
+    try { await useApp.getState().renameModel(m.id, next); toast(next ? "Renamed" : "Name reset"); }
+    catch (e) { toast(String(e)); }
+  };
   useDataset(); // re-render if the dataset swaps
+  // Which slicer the button starts (Settings → Libraries → Slicer) — it names
+  // the button; the backend reads the same setting when it launches.
+  const [slicer, setSlicer] = useState<SlicerId>("bambu");
+  useEffect(() => {
+    if (!isTauri) return;
+    api.getSetting("slicer_app").then((v) => setSlicer(slicerId(v))).catch(() => {});
+  }, []);
+  // The CAD program "Edit in …" starts, or null when there is none (button hidden).
+  const [cadName, setCadName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isTauri) return;
+    api.cadName().then(setCadName).catch(() => {});
+  }, []);
 
   // The grid ships slim models; pull the on-demand-hydrated full record (files,
   // parts, folder, desc) and fetch it on open. Until it lands the poster + identity
@@ -54,10 +78,16 @@ export function DetailScreen({ model }: { model: Model }) {
   // alphabetically first) can be slow/unparseable and would fall back to a shape.
   const stlIdx = Math.max(0, parts.findIndex((p) => (p.files[0]?.type || "").toLowerCase() === "stl"));
   const [sel, setSel] = useState(stlIdx);
+  // Which version of the selected part is in view (0 = newest). Everything below
+  // — viewer, slicer, CAD, plates — works on that version's files.
+  const [ver, setVer] = useState(0);
   // Re-init selection on model change AND when hydration swaps in the real parts.
-  useEffect(() => { setSel(stlIdx); setRealDims(null); setShow3D(false); setShowAllParts(false); }, [m.id, full]);
+  useEffect(() => { setSel(stlIdx); setVer(0); setRealDims(null); setShow3D(false); setShowAllParts(false); }, [m.id, full]);
   const part = parts[sel] || parts[0];
-  const partFile = part.files[0];
+  const partFiles = versionFiles(part, ver);
+  const partFile = partFiles[0];
+  const pickPart = (i: number) => { setSel(i); setVer(0); setRealDims(null); };
+  const pickVersion = (i: number) => { setVer(i); setRealDims(null); setShow3D(false); };
   // Project/source files anywhere in this model's folder tree (Blender, 3MF, etc.).
   const sourceFiles = m.files.filter((f) => SOURCE_TYPES.includes((f.type || "").toLowerCase()));
   // Cached local image used as the instant poster (downscaled render / rendered thumb).
@@ -92,6 +122,72 @@ export function DetailScreen({ model }: { model: Model }) {
     }
     toast("Revealed in your file manager");
   };
+  // The slim grid row always carries the current status; the hydrated record is
+  // patched by the store on change, so either source is fresh.
+  const status = printStatusOf(m);
+  const changeStatus = async (next: PrintStatus) => {
+    try { await setPrintStatus(m.id, next); }
+    catch (e) { toast(String(e)); }
+  };
+  // What the slicer gets: the selected part if it's sliceable, else the model's
+  // best sliceable file (a 3MF project before a bare mesh).
+  const toSlice = slicerFile(m, partFiles);
+  // CAD gets the part's most editable format: a native design or STEP before a mesh.
+  const toEdit = cadFile(m, partFiles);
+  const openInCad = async () => {
+    if (!toEdit?.path) return;
+    try { await api.openInCad(toEdit.path); toast(`Opening ${toEdit.name} in ${cadName}…`); }
+    catch (e) { toast(String(e)); }
+  };
+  const formats = formatsOf(m);
+  // Plates of the slicer project in view, loaded on demand (the backend reads the
+  // project once, then serves from its cache). Listed only for multi-plate
+  // projects — for a single plate the model's print status says it all.
+  const project = plateProject(m, partFiles);
+  const projectPath = project?.path;
+  const [plates, setPlates] = useState<Plate[]>([]);
+  useEffect(() => {
+    setPlates([]);
+    if (!isTauri || !projectPath) return;
+    let stale = false;
+    Promise.all([api.getPlates(projectPath), loadConvert()])
+      .then(([ps, conv]) => { if (!stale) setPlates(ps.map((p) => ({ ...p, thumb: p.thumb ? conv(p.thumb) : undefined }))); })
+      .catch(() => {});
+    return () => { stale = true; };
+  }, [projectPath]);
+  const platesDone = plates.filter((p) => p.printed).length;
+  const togglePlate = async (p: Plate) => {
+    if (!projectPath) return;
+    const printed = !p.printed;
+    // Optimistic: flip now, put it back if the write fails.
+    const flip = (v: boolean) => setPlates((ps) => ps.map((x) => (x.index === p.index ? { ...x, printed: v } : x)));
+    flip(printed);
+    try { await api.setPlatePrinted(projectPath, p.index, printed); }
+    catch (e) { flip(!printed); toast(String(e)); }
+  };
+  const slicerName = slicerButtonName(slicer);
+  const openInSlicer = async () => {
+    if (!toSlice?.path) return;
+    if (!isTauri) { toast(`Opening in ${slicerName}…`); return; }
+    try { await api.openInSlicer(toSlice.path); toast(`Opening ${toSlice.name} in ${slicerName}…`); }
+    catch (e) { toast(String(e)); }
+  };
+  // Folder grouping is the user's call below the library root: split a category
+  // folder into its models, or put a split folder back together. Index-only —
+  // nothing moves on disk. Both start a rescan, after which this model's id is
+  // gone (split) or its siblings are (regroup), so leave for the library.
+  const regroup = async (start: () => Promise<Library[]>, msg: string) => {
+    try {
+      useApp.getState().setLibraries(await start());
+      toast(msg);
+      nav({ name: "library" });
+    } catch (e) { toast(String(e)); }
+  };
+  const split = () => regroup(() => api.splitFolder(m.id), `Splitting “${m.name}” into separate models…`);
+  const unsplit = () => m.splitParent && regroup(() => api.unsplitFolder(m.splitParent!), `Regrouping “${folderName(m.splitParent)}”…`);
+  // Damaged files (unreadable archives) — named on the page so the missing
+  // preview has an explanation.
+  const damagedFiles = m.files.filter((f) => f.damaged && f.path);
   const copyPath = async () => {
     try { await copyText(m.folder); toast("Path copied to clipboard"); }
     catch { toast("Path copied to clipboard"); }
@@ -138,6 +234,10 @@ export function DetailScreen({ model }: { model: Model }) {
                     <button className={"vtool" + (mode === "measure" ? " is-active" : "")} onClick={() => setMode("measure")}><Icon name="ruler" size={16} /> Measure</button>
                     {mode === "rotate" &&
                       <button className={"vtool" + (auto ? " is-active" : "")} onClick={() => setAuto(!auto)} title="Turntable"><Icon name="history" size={16} /></button>}
+                    {/* Way back from the live mesh to the instant picture (real models only —
+                        demo data has no picture to go back to). */}
+                    {!procedural && poster &&
+                      <button className="vtool" onClick={() => setShow3D(false)} title="Back to the preview picture"><Icon name="eye" size={16} /> Picture</button>}
                   </div>
                 </>
               ) : (
@@ -189,7 +289,18 @@ export function DetailScreen({ model }: { model: Model }) {
         </div>
 
         <div>
-          <h1 className="page-title" style={{ fontSize: 26 }}>{m.name}</h1>
+          {nameDraft === null
+            ? <h1 className="page-title title-edit" style={{ fontSize: 26 }}>
+                {m.name}
+                <button className="title-edit-btn" title="Rename (display name only — files keep their names)" onClick={() => setNameDraft(m.name)}><Icon name="edit" size={15} /></button>
+              </h1>
+            : <input className="input title-input" autoFocus value={nameDraft} placeholder="Leave empty to reset the name"
+                     onChange={(e) => setNameDraft(e.target.value)} onBlur={saveName}
+                     onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") setNameDraft(null); }} />}
+          {formats.length > 0 &&
+            <div className="format-row" title="Formats this model is available in">
+              {formats.map((t) => <span key={t} className="format-chip">{t}</span>)}
+            </div>}
           <div className="creator-card" style={{ marginTop: 14, boxShadow: "none", cursor: "pointer" }} onClick={() => nav({ name: "creator", id: creator.id })}>
             <Avatar name={creator.name} tone={creator.tone} size={42} />
             <div style={{ flex: 1 }}>
@@ -207,9 +318,95 @@ export function DetailScreen({ model }: { model: Model }) {
                 <div className="file-sub" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.folder || (hydrating ? "Loading…" : "")}</div>
               </div>
             </div>
-            <button className="btn btn-primary" style={{ width: "100%", marginTop: 12 }} onClick={openFolder} disabled={hydrating}><Icon name="folder" size={17} /> Open folder</button>
+            <button className="btn btn-primary" style={{ width: "100%", marginTop: 12 }} onClick={openInSlicer} disabled={hydrating || !toSlice}
+                    title={toSlice ? toSlice.name : "No file in this model that a slicer can open"}>
+              <Icon name="printer" size={17} /> Open in {slicerName}
+            </button>
+            {cadName && toEdit &&
+              <button className="btn" style={{ width: "100%", marginTop: 10 }} onClick={openInCad} disabled={hydrating} title={toEdit.name}>
+                <Icon name="wand" size={17} /> Edit in {cadName}
+              </button>}
+            <button className="btn" style={{ width: "100%", marginTop: 10 }} onClick={openFolder} disabled={hydrating}><Icon name="folder" size={17} /> Open folder</button>
             <button className="btn" style={{ width: "100%", marginTop: 10 }} onClick={copyPath} disabled={hydrating}><Icon name="link" size={16} /> Copy path</button>
           </div>
+
+          <div className="panel">
+            <div className="panel-h"><Icon name="printer" size={18} /> Print status</div>
+            <div className="status-seg" role="group" aria-label="Print status">
+              <button className={status === "" ? "is-active" : ""} onClick={() => changeStatus("")}>None</button>
+              {PRINT_STATUSES.map((s) =>
+                <button key={s.id} className={(status === s.id ? "is-active " : "") + "st-" + s.id} onClick={() => changeStatus(s.id)}>{s.label}</button>
+              )}
+            </div>
+          </div>
+
+          {plates.length > 1 &&
+            <div className="panel">
+              <div className="panel-h"><Icon name="layers" size={18} /> Plates
+                <span className="faint" style={{ fontWeight: 500, marginLeft: 4 }}>{platesDone} of {plates.length} printed</span>
+              </div>
+              <div className="file-sub" style={{ margin: "-4px 0 8px" }}>{project?.name}</div>
+              <div className="plate-list">
+                {plates.map((p) =>
+                  <button key={p.index} className={"plate-row" + (p.printed ? " is-printed" : "")} onClick={() => togglePlate(p)}
+                          title={p.printed ? "Printed — click to undo" : "Mark this plate as printed"}>
+                    {p.thumb ? <img src={p.thumb} alt="" draggable={false} /> : <span className="plate-noimg"><Icon name="cube" size={18} /></span>}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="file-name">{plateLabel(p)}</div>
+                      <div className="file-sub">Plate {p.index}</div>
+                    </div>
+                    <span className="plate-check"><Icon name="check" size={14} /></span>
+                  </button>
+                )}
+              </div>
+            </div>
+          }
+
+          {isTauri && !hydrating && damagedFiles.length > 0 &&
+            <div className="panel danger-panel">
+              <div className="panel-h"><Icon name="info" size={18} /> Damaged file{damagedFiles.length > 1 ? "s" : ""}</div>
+              <p className="muted" style={{ fontSize: 13, margin: "0 0 10px" }}>
+                {damagedFiles.length > 1 ? "These files are" : "This file is"} incomplete — the archive has no table of contents, as after a copy that was cut short. No slicer can open {damagedFiles.length > 1 ? "them" : "it"}, which is also why there is no preview.
+              </p>
+              {damagedFiles.map((f) =>
+                <button key={f.path} className="part-row" onClick={() => revealFile(f.path)} title="Reveal in folder">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="file-name">{f.name}</div>
+                    <div className="file-sub">{fmtSize(f.size)}</div>
+                  </div>
+                  <Icon name="folder" size={16} style={{ color: "var(--ink-3)", flexShrink: 0 }} />
+                </button>
+              )}
+            </div>
+          }
+
+          {isTauri && !hydrating && m.belongsTo &&
+            <div className="panel hint-panel">
+              <div className="panel-h"><Icon name="folder" size={18} /> Belongs in “{folderName(m.belongsTo)}”?</div>
+              <p className="muted" style={{ fontSize: 13, margin: "0 0 10px" }}>
+                This loose file sits right next to a folder of the same name. Moved into that folder, it would show up as a part (or a new version) of that model. Trove never moves files itself.
+              </p>
+              <button className="btn" style={{ width: "100%" }} onClick={openFolder}><Icon name="folder" size={16} /> Open folder</button>
+            </div>
+          }
+
+          {isTauri && !hydrating && (canSplit(m) || m.splitParent) &&
+            <div className="panel">
+              <div className="panel-h"><Icon name="folder" size={18} /> Folder grouping</div>
+              {canSplit(m) && <>
+                <p className="muted" style={{ fontSize: 13, margin: "0 0 10px" }}>
+                  Is this folder a category rather than one model? Split it: each loose file becomes its own model and each subfolder stays one. Nothing moves on disk.
+                </p>
+                <button className="btn" style={{ width: "100%" }} onClick={split}><Icon name="grid" size={16} /> Split into separate models</button>
+              </>}
+              {m.splitParent && <>
+                <p className="muted" style={{ fontSize: 13, margin: canSplit(m) ? "14px 0 10px" : "0 0 10px" }}>
+                  Split out of “{folderName(m.splitParent)}”.
+                </p>
+                <button className="btn" style={{ width: "100%" }} onClick={unsplit}><Icon name="layers" size={16} /> Regroup “{folderName(m.splitParent)}” into one model</button>
+              </>}
+            </div>
+          }
 
           <div className="panel">
             <div className="panel-h"><Icon name="layers" size={18} /> Collections</div>
@@ -226,16 +423,30 @@ export function DetailScreen({ model }: { model: Model }) {
               {hydrating ? (
                 <div className="file-sub" style={{ padding: "10px 2px" }}>Loading parts…</div>
               ) : parts.slice(0, showAllParts ? parts.length : Math.max(PART_CAP, sel + 1)).map((p, i) =>
-                <button key={p.id} className={"part-row" + (i === sel ? " active" : "")} onClick={() => setSel(i)}>
+                <button key={p.id} className={"part-row" + (i === sel ? " active" : "")} onClick={() => pickPart(i)}>
                   <Thumb geometry={p.geometry} color={p.color} className="part-thumb" real={!!p.files[0]?.path} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="file-name">{p.name}</div>
-                    <div className="file-sub">{p.files.map((fl) => fl.type.toUpperCase()).join(" · ")} · {fmtSize(p.files.reduce((n, fl) => n + fl.size, 0))}</div>
+                    <div className="file-sub">
+                      {p.versions && <>{p.versions[0].label} · {p.versions.length} versions · </>}
+                      {p.files.map((fl) => fl.type.toUpperCase()).join(" · ")} · {fmtSize(p.files.reduce((n, fl) => n + fl.size, 0))}
+                    </div>
                   </div>
                   {i === sel && <Icon name="eye" size={17} style={{ color: "var(--accent)", flexShrink: 0 }} />}
                 </button>
               )}
             </div>
+            {part.versions &&
+              <div className="version-row" title="Versions of this part, from its file names">
+                <span className="faint">Version</span>
+                {part.versions.map((v, i) =>
+                  <button key={v.label} className={"version-chip" + (i === ver ? " is-active" : "")} onClick={() => pickVersion(i)}
+                          title={v.files.map((fl) => fl.name).join(", ")}>
+                    {v.label}{i === 0 ? " · newest" : ""}
+                  </button>
+                )}
+              </div>
+            }
             {parts.length > PART_CAP &&
               <button className="btn btn-sm" style={{ width: "100%", marginTop: 8 }} onClick={() => setShowAllParts((v) => !v)}>
                 {showAllParts ? "Show fewer" : `Show all ${parts.length} parts`}
@@ -263,12 +474,12 @@ export function DetailScreen({ model }: { model: Model }) {
         </div>
       </div>
 
-      <div style={{ marginTop: 38 }}>
+      {sims.length > 0 && <div style={{ marginTop: 38 }}>
         <div className="panel-h" style={{ fontSize: 18, marginBottom: 16 }}><Icon name="wand" size={19} /> Similar models</div>
         <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 8 }}>
           {sims.map((s) => <MiniCard key={s.id} m={s} onOpen={(mm) => nav({ name: "model", id: mm.id })} />)}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

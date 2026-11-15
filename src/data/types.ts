@@ -13,6 +13,15 @@ export interface ModelFile {
   size: number; // bytes
   /** Absolute path on disk — populated by the Rust scanner (Phase 2+). */
   path?: string;
+  /** The file is an unreadable archive (e.g. a .3mf whose copy was cut short). */
+  damaged?: boolean;
+}
+
+/** One version of a part, recognised from its file name (stand_v4.3mf → "v4"). */
+export interface PartVersion {
+  /** "v4", "v11h", or "original" for the file without a version marker. */
+  label: string;
+  files: ModelFile[];
 }
 
 export interface Part {
@@ -20,7 +29,21 @@ export interface Part {
   name: string;
   geometry: GeometryKey;
   color: string;
+  /** The part's files — of its newest version when it has several. */
   files: ModelFile[];
+  /** All versions, newest first; absent unless the part exists in at least two. */
+  versions?: PartVersion[];
+}
+
+/** One build plate of a slicer project (.3mf). */
+export interface Plate {
+  /** 1-based plate number, as the slicer shows it. */
+  index: number;
+  /** Plate name from the project; "" when it has none. */
+  name: string;
+  /** Cached preview image (asset URL once resolved). */
+  thumb?: string;
+  printed: boolean;
 }
 
 export interface Creator {
@@ -43,6 +66,9 @@ export interface Collection {
       collections leave this undefined (matched by the model's `collection`). */
   members?: string[];
 }
+
+/** User-set print status. "" = none. Mirrors PRINT_STATUSES in index.rs. */
+export type PrintStatus = "" | "queued" | "printed";
 
 export interface Model {
   id: string;
@@ -96,6 +122,19 @@ export interface Model {
   partsCount?: number;
   /** True for real on-disk models — show the cached thumbnail, not a mock shape. */
   real?: boolean;
+  /** User-set print status ("queued" = to print, "printed"); absent/"" = none. */
+  printStatus?: PrintStatus;
+  /** True when the model is one loose file on a shelf, not a folder of its own. */
+  fileModel?: boolean;
+  /** The folder this model was split out of by the user, if any (offer to regroup). */
+  splitParent?: string;
+  /** For a loose-file model: the same-named folder next to it, where it most
+      likely belongs (pointed out on its page). */
+  belongsTo?: string;
+  /** True when the model holds a "(2)"-style copy of one of its own files. */
+  duplicates?: boolean;
+  /** True when one of the model's files is damaged (see ModelFile.damaged). */
+  damaged?: boolean;
 }
 
 /* ── Quick Find launcher results (from the Rust quick_search command) ── */
@@ -187,6 +226,8 @@ export interface Filters {
   types: string[];
   licenses: string[];
   supportFree: boolean;
+  /** Print statuses to keep (any-of); empty = don't filter by status. */
+  status: PrintStatus[];
   sort: "newest" | "popular" | "name" | "quick";
 }
 
@@ -195,6 +236,7 @@ export const DEFAULT_FILTERS: Filters = {
   types: [],
   licenses: [],
   supportFree: false,
+  status: [],
   sort: "newest",
 };
 

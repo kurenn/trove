@@ -96,6 +96,33 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY(collection_id, model_id)
         );
 
+        -- Per-model print status set by the user ('queued' | 'printed'; no row =
+        -- none). Deliberately NOT a column on `models` and NOT cascading: a
+        -- rescan deletes and re-inserts model rows, and the status must survive
+        -- that the same way collection membership does.
+        CREATE TABLE IF NOT EXISTS print_status (
+            model_id TEXT PRIMARY KEY, status TEXT NOT NULL, updated TEXT NOT NULL DEFAULT ''
+        );
+
+        -- Folders the user chose to split: indexed as a shelf (each loose model
+        -- file its own model, each subfolder grouped on its own) instead of as
+        -- one model. Absolute directory paths; consulted by every scan.
+        CREATE TABLE IF NOT EXISTS split_dirs (path TEXT PRIMARY KEY);
+
+        -- Plates of a multi-plate slicer project (.3mf) the user ticked off as
+        -- printed. Keyed by the project file's absolute path + 1-based plate
+        -- index; a row means printed. Survives rescans like print_status.
+        CREATE TABLE IF NOT EXISTS plate_status (
+            file_path TEXT NOT NULL, plate INTEGER NOT NULL, printed_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(file_path, plate)
+        );
+
+        -- Project files (.3mf) found to be unreadable archives — typically a
+        -- copy that was cut short. Written by the preview pass, which is the
+        -- one place that opens them anyway; a row is removed when the file
+        -- reads fine again.
+        CREATE TABLE IF NOT EXISTS damaged_files (path TEXT PRIMARY KEY);
+
         CREATE INDEX IF NOT EXISTS idx_models_library ON models(library_id);
         CREATE INDEX IF NOT EXISTS idx_files_model    ON files(model_id);
         CREATE INDEX IF NOT EXISTS idx_tags_model     ON tags(model_id);

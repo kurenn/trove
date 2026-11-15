@@ -3,6 +3,30 @@
 All notable changes to Trove. This project uses [semantic versioning](https://semver.org).
 The section for each version becomes that version's GitHub release notes.
 
+## [Unreleased]
+### Added
+- **Print status.** Mark a model as *To print* or *Printed* on its detail page. The status shows as a badge on cards and list rows, can be filtered in the sidebar, and survives rescans.
+- **Open in your slicer.** A button on the detail page hands the selected part — or the model's 3MF project — straight to Bambu Studio or OrcaSlicer (native or Flatpak). Choose which under Settings → Libraries → Slicer, or enter a custom command for any other slicer.
+- **Damaged projects are called out.** A `.3mf` that was cut short — an interrupted copy or download — used to just show no preview. It now gets a "damaged" badge, and its page says which file and why.
+- **Duplicates are spotted.** A second download — `name(2).3mf` next to `name.3mf` — no longer shows as a second model: it joins the first as a copy, and the card says "duplicate".
+- **Rename a model.** Click the pencil next to a model's name to give it one of your own. Only the name Trove shows changes — files and folders keep theirs — and search finds the new name.
+- **STEP models get a preview.** A model that only has STEP files now gets a rendered thumbnail instead of a blank tile.
+- **The newest version is the model's picture.** With `stand.3mf` … `stand_v4.3mf`, the thumbnail comes from v4.
+- **Loose copies are spotted.** A loose file lying next to a folder of the same name — typically a project the slicer saved one level too high — gets a "loose copy" badge and a note on its page.
+- **Plates of a project, with a tick for each.** A multi-plate Bambu Studio / OrcaSlicer project lists its plates on the model's page — name and preview — and each can be marked printed, so a 25-plate build shows how far it is.
+- **Versions from file names.** `stand.3mf`, `stand_v2.3mf`, `stand_v4.3mf` are now one part with a version switcher, newest first; the buttons act on the version you pick.
+- **One part, several formats.** `arm.stl`, `arm.step` and `arm.3mf` in the same folder now show as one part with its formats, not three parts, and the model's page lists the formats it comes in. The slicer button picks the 3MF, the CAD button the STEP.
+- **Edit in CAD.** A button on the detail page opens the part in SolidCraft, or in any CAD program you set under Settings → Libraries → CAD.
+- **Split a category folder into its models.** A folder that is really a category — loose files that are separate things, plus project folders — can be split from its detail page: each loose file becomes its own model, each subfolder stays one. *Regroup* puts it back. Only the index changes; nothing moves on disk.
+
+### Fixed
+- **STEP files load again.** The STEP loader couldn't find its WebAssembly module, so "View in 3D" on a STEP file always fell back to the placeholder.
+- **"Similar models" means similar.** It counted the format tag every model carries (`3mf`), so it listed four arbitrary models. It now matches on words in the name, descriptive tags and the collection, and hides itself when nothing matches. The small cards are equal-sized and show file facts instead of an empty "· g".
+- **3D view: a way back, and no more empty stage.** "View in 3D" now has a *Picture* button to return to the preview. A sliced print job (`.gcode.3mf`) holds no 3D model — instead of an empty viewer it now shows the preview picture and says so.
+- **List view is a list again.** In libraries large enough to be windowed (150+ models), switching from grid to list kept the grid's columns and squeezed the rows into three narrow cards.
+- **Smoother scrolling on Linux.** The grid no longer stacks a blur layer on every card there.
+- **A prints folder with loose files at the top is no longer one giant model.** If the folder you mount has model files lying directly in it next to your project folders, each loose file is now its own model and the folders are indexed as before. Reindex once to pick this up.
+
 ## [2.2.0]
 ### Added
 - **Models without a photo now get a real 3D preview, generated while indexing.** Previously a model whose folder had no image and no embedded thumbnail showed a blank tile, and only got a preview if you happened to scroll to its card — which meant downloading the whole mesh over the network, two at a time, and never retrying if that failed. On a 4,800-model library on a NAS, that path had produced **zero** previews and left over a thousand models blank. Previews are now rendered natively during indexing, straight from the STL, and cached like every other thumbnail. In testing this filled in 1,036 previously blank models in about 18 minutes.

@@ -7,7 +7,7 @@
 
 import * as THREE from "three";
 import { makeMaterial } from "./geometries";
-import { normalize } from "./loaders";
+import { normalize, loadMesh } from "./loaders";
 import { assetUrl, api, isTauri } from "../lib/tauri";
 import { useApp } from "../lib/store";
 import type { Model } from "../data/types";
@@ -145,11 +145,64 @@ export function requestThumb(m: Model): void {
   pump();
 }
 
+// ── STEP models ──────────────────────────────────────────────────────────────
+// A STEP-only model has no embedded image, and the Rust scanner can't rasterize
+// CAD geometry — so it would stay a blank tile forever. Render one here with the
+// same OCCT WASM the viewer uses. That parse runs on the main thread, so: one at
+// a time, small files only, with a pause between — never a burst that stalls
+// scrolling. The result is persisted, so each model costs this once.
+const STEP_MAX_BYTES = 3_000_000;
+const STEP_GAP_MS = 400;
+const stepQueue: Model[] = [];
+let stepBusy = false;
+
+/** Slim grid models that need a STEP render: real, image-less, and STEP is the
+    only mesh they have (STL is rendered by the scanner, 3MF carries a thumbnail). */
+export function needsStepThumb(m: Model, have: Record<string, string>): boolean {
+  if (!m.real || m.preview || m.thumb || have[m.id]) return false;
+  const types = (m.fileTypes ?? []).map((t) => t.toLowerCase());
+  return types.some((t) => t === "step" || t === "stp") && !types.some((t) => t === "stl" || t === "3mf");
+}
+
+async function renderStep(m: Model): Promise<void> {
+  try {
+    const full = await api.getModel(m.id);
+    const file = full?.parts
+      .flatMap((p) => p.files)
+      .filter((f) => f.path && /^(step|stp)$/i.test(f.type) && f.size <= STEP_MAX_BYTES)
+      .sort((a, b) => a.size - b.size)[0];
+    if (!file?.path) return;
+    const group = await loadMesh({ url: await assetUrl(file.path), ext: file.type }, m.color);
+    const png = renderToPng(group);
+    group.traverse((o) => { (o as THREE.Mesh).geometry?.dispose?.(); });
+    setThumb(m.id, png);
+    await api.saveThumb(m.id, png).catch(() => {});
+  } catch {
+    /* leave the neutral placeholder */
+  }
+}
+
+function pumpStep() {
+  if (stepBusy) return;
+  const m = stepQueue.shift();
+  if (!m) return;
+  stepBusy = true;
+  renderStep(m).finally(() => setTimeout(() => { stepBusy = false; pumpStep(); }, STEP_GAP_MS));
+}
+
 /** Background pass: render thumbnails for every model that still needs one
    (image-less, with a worker-parseable part), throttled by the queue above so a
    network share is never hammered. Idempotent — already-done/attempted models are
    skipped — so it's safe to call on every dataset refresh. */
 export function sweepThumbs(models: Model[]): void {
   if (!isTauri) return;
-  for (const m of models) requestThumb(m);
+  const have = useApp.getState().thumbs;
+  for (const m of models) {
+    requestThumb(m);
+    if (!attempted.has(m.id) && needsStepThumb(m, have)) {
+      attempted.add(m.id);
+      stepQueue.push(m);
+    }
+  }
+  pumpStep();
 }

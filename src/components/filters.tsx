@@ -2,10 +2,13 @@
 
 import { useMemo, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { Icon } from "./Icons";
-import { useDataset } from "../data/dataset";
-import type { Filters, Model } from "../data/types";
+import { useDataset, PRINT_STATUSES, printStatusOf } from "../data/dataset";
+import type { Filters, Model, PrintStatus } from "../data/types";
 
-export function FacetGroup({ title, children, defaultOpen = true }: { title: ReactNode; children: ReactNode; defaultOpen?: boolean }) {
+/** A collapsible filter group. Starts collapsed so the panel opens as a short
+    list of headings; pass `defaultOpen` for a group that has a filter set, so an
+    active filter is never hidden. */
+export function FacetGroup({ title, children, defaultOpen = false }: { title: ReactNode; children: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="facet">
@@ -32,29 +35,43 @@ export function FiltersPanel({ f, setF, models }: FiltersPanelProps) {
     const tags: Record<string, number> = {};
     const types: Record<string, number> = {};
     const licenses: Record<string, number> = {};
+    const status: Record<string, number> = {};
     let supportFree = 0;
     for (const m of models) {
       if (!m.supports) supportFree++;
+      const st = printStatusOf(m);
+      if (st) status[st] = (status[st] ?? 0) + 1;
       for (const t of m.tags) tags[t] = (tags[t] ?? 0) + 1;
       // Slim grid models carry `fileTypes`; mock falls back to the full files array.
       const ftypes = m.fileTypes ?? [...new Set(m.files.map((fl) => fl.type))];
       for (const ft of ftypes) types[ft] = (types[ft] ?? 0) + 1;
       if (m.license) licenses[m.license] = (licenses[m.license] ?? 0) + 1;
     }
-    return { tags, types, licenses, supportFree };
+    return { tags, types, licenses, supportFree, status };
   }, [models]);
   const toggle = (key: "tags" | "types" | "licenses", val: string) =>
     setF((s) => ({ ...s, [key]: s[key].includes(val) ? s[key].filter((x) => x !== val) : [...s[key], val] }));
+  const toggleStatus = (val: PrintStatus) =>
+    setF((s) => ({ ...s, status: s.status.includes(val) ? s.status.filter((x) => x !== val) : [...s.status, val] }));
   return (
     <div className="facets">
-      <FacetGroup title="Print readiness">
+      <FacetGroup title="Print status" defaultOpen={f.status.length > 0}>
+        {PRINT_STATUSES.map((st) => (
+          <label key={st.id} className="check">
+            <input type="checkbox" checked={f.status.includes(st.id)} onChange={() => toggleStatus(st.id)} />
+            <span className="box"><Icon name="check" size={13} /></span>{st.label}
+            <span className="ct">{counts.status[st.id] ?? 0}</span>
+          </label>
+        ))}
+      </FacetGroup>
+      <FacetGroup title="Print readiness" defaultOpen={f.supportFree}>
         <label className="check">
           <input type="checkbox" checked={f.supportFree} onChange={() => setF((s) => ({ ...s, supportFree: !s.supportFree }))} />
           <span className="box"><Icon name="check" size={13} /></span>Support-free only
           <span className="ct">{counts.supportFree}</span>
         </label>
       </FacetGroup>
-      <FacetGroup title="Tags">
+      <FacetGroup title="Tags" defaultOpen={f.tags.length > 0}>
         {S.ALL_TAGS.slice(0, 10).map((t) => (
           <label key={t} className="check">
             <input type="checkbox" checked={f.tags.includes(t)} onChange={() => toggle("tags", t)} />
@@ -63,7 +80,7 @@ export function FiltersPanel({ f, setF, models }: FiltersPanelProps) {
           </label>
         ))}
       </FacetGroup>
-      <FacetGroup title="File type">
+      <FacetGroup title="File type" defaultOpen={f.types.length > 0}>
         {S.FILE_TYPES.map((t) => (
           <label key={t} className="check">
             <input type="checkbox" checked={f.types.includes(t)} onChange={() => toggle("types", t)} />
@@ -72,7 +89,7 @@ export function FiltersPanel({ f, setF, models }: FiltersPanelProps) {
           </label>
         ))}
       </FacetGroup>
-      <FacetGroup title="License" defaultOpen={false}>
+      <FacetGroup title="License" defaultOpen={f.licenses.length > 0}>
         {S.LICENSES.map((t) => (
           <label key={t} className="check">
             <input type="checkbox" checked={f.licenses.includes(t)} onChange={() => toggle("licenses", t)} />

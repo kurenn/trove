@@ -7,6 +7,13 @@ import "./styles/theme.css";
 import "./styles/app.css";
 import "./styles/launcher.css";
 
+// WebKitGTK (the Linux webview) composites `backdrop-filter` in software: a blur
+// layer on every card's heart + badges makes a long grid stutter while scrolling.
+// Flag the platform so the stylesheet can swap those blurs for a plain fill there.
+if (isTauri && /Linux/i.test(navigator.userAgent) && !/Android/i.test(navigator.userAgent)) {
+  document.documentElement.classList.add("no-backdrop-blur");
+}
+
 async function boot() {
   let isLauncher = false;
   if (isTauri) {

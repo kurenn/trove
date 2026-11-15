@@ -3,13 +3,24 @@
 import { Icon, Avatar } from "./Icons";
 import { Thumb } from "../three/Viewer";
 import { VirtualGrid } from "./VirtualGrid";
-import { creatorById, fmtSize, isReal, partCount, fileCount } from "../data/dataset";
+import { creatorById, fmtSize, isReal, partCount, fileCount, printStatusOf, printStatusLabel } from "../data/dataset";
 import type { Creator, Model } from "../data/types";
 
 // Above this many cards, switch the grid to windowed rendering.
 const VIRTUALIZE_THRESHOLD = 150;
 
 const UNKNOWN_CREATOR: Creator = { id: "", name: "Unknown", handle: "", models: 0, blurb: "", tone: "var(--ink-3)" };
+
+/** Print-status pill — rendered only when the user has set a status. */
+export function StatusBadge({ m, className = "card-badge" }: { m: Model; className?: string }) {
+  const s = printStatusOf(m);
+  if (!s) return null;
+  return (
+    <span className={className + " status-badge st-" + s}>
+      <Icon name={s === "printed" ? "check" : "printer"} size={12} /> {printStatusLabel(s)}
+    </span>
+  );
+}
 
 /** Card footer facts: print stats for demo data, file facts for real scans. */
 function CardFoot({ m }: { m: Model }) {
@@ -50,6 +61,10 @@ export function ModelCard({ m, onOpen, fav, onFav }: CardProps) {
           <Icon name="heart" size={16} fill={fav ? "currentColor" : "none"} />
         </button>
         <div className="card-badges">
+          <StatusBadge m={m} />
+          {m.damaged && <span className="card-badge danger-badge" title="A file in this model is damaged and can't be opened"><Icon name="info" size={12} /> damaged</span>}
+          {m.duplicates && <span className="card-badge hint-badge" title="Holds a “(2)”-style copy of one of its files"><Icon name="layers" size={12} /> duplicate</span>}
+          {m.belongsTo && <span className="card-badge hint-badge" title="A loose file next to a folder of the same name"><Icon name="folder" size={12} /> loose copy</span>}
           {!m.supports && <span className="card-badge"><Icon name="check" size={12} /> support-free</span>}
           {partCount(m) > 1
             ? <span className="card-badge"><Icon name="cube" size={12} /> {partCount(m)} parts</span>
@@ -77,7 +92,7 @@ export function ListRow({ m, onOpen, fav, onFav }: CardProps) {
     <div className="list-row" onClick={() => onOpen(m)}>
       <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={isReal(m)} />
       <div className="list-main">
-        <div className="list-name">{m.name}</div>
+        <div className="list-name">{m.name} <StatusBadge m={m} className="list-status" /></div>
         <div className="list-sub">{creator.name} · {m.tags.slice(0, 3).join(", ")}</div>
       </div>
       <div className="muted spool-mono" style={{ fontSize: 12.5, display: "flex", gap: 18 }}>
@@ -96,11 +111,16 @@ export function ListRow({ m, onOpen, fav, onFav }: CardProps) {
 
 export function MiniCard({ m, onOpen }: { m: Model; onOpen: (m: Model) => void }) {
   return (
-    <div className="model-card" style={{ minWidth: 160 }} onClick={() => onOpen(m)}>
+    <div className="model-card mini-card" onClick={() => onOpen(m)}>
       <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={isReal(m)} />
       <div className="card-body" style={{ padding: 11, gap: 4 }}>
         <div className="card-title" style={{ fontSize: 13.5 }}>{m.name}</div>
-        <div className="faint" style={{ fontSize: 11.5 }}>{m.printTime} · {m.filament}g</div>
+        {/* Print stats exist only for demo data; real models show file facts. */}
+        <div className="faint" style={{ fontSize: 11.5 }}>
+          {m.printTime != null
+            ? <>{m.printTime} · {m.filament}g</>
+            : <>{fileCount(m)} file{fileCount(m) === 1 ? "" : "s"} · {fmtSize(m.totalSize ?? m.files.reduce((n, f) => n + f.size, 0))}</>}
+        </div>
       </div>
     </div>
   );
@@ -128,6 +148,7 @@ export function ModelResults({ models, view, onOpen, fav, onFav }: ResultsProps)
       // libraries don't mount thousands of rows (each with a Thumb) at once.
       return (
         <VirtualGrid
+          key="list" // own instance: never inherit the grid's column count/row height
           items={models}
           keyOf={(m) => m.id}
           minCol={100000}
@@ -146,6 +167,7 @@ export function ModelResults({ models, view, onOpen, fav, onFav }: ResultsProps)
     // --grid-min 240 (comfy) / --gap 18 — windowed for large libraries.
     return (
       <VirtualGrid
+        key="grid"
         items={models}
         keyOf={(m) => m.id}
         minCol={240}

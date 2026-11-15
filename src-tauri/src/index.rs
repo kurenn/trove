@@ -583,6 +583,14 @@ fn compute_record(root: &Path, dir: &Path, mtime: i64, files: Vec<ScannedFile>) 
     let printable_exts: Vec<String> = printable.iter().map(|f| f.ext.clone()).collect();
     let (tags, supports) = auto_tags(&hay, &printable_exts, printable.len() > 1);
     let preview = pick_preview(&files);
+    // Real model: every file lives under `dir`. Virtual (shelf-root file model):
+    // the files live in `dir`'s parent, and that is the folder to show.
+    let stored_folder = match files.first().map(|f| Path::new(&f.path)) {
+        Some(first) if !first.starts_with(dir) => {
+            first.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| folder.clone())
+        }
+        _ => folder.clone(),
+    };
 
     ModelRecord {
         id: model_id,
@@ -595,7 +603,9 @@ fn compute_record(root: &Path, dir: &Path, mtime: i64, files: Vec<ScannedFile>) 
         color: color_for(&folder),
         supports,
         added,
-        folder,
+        // A shelf-root file model has a virtual dir (see group_models); what the
+        // user can open and copy is the folder its file actually lives in.
+        folder: stored_folder,
         file_count: fcount,
         total_size,
         dir_mtime: mtime,
@@ -651,7 +661,7 @@ fn persist_scan(conn: &mut Connection, lib_id: &str, root: &Path) -> rusqlite::R
         Arc::new(move |p, f, m| { d2.lock().unwrap().insert(p, (f, m)); });
     collect_tree(root, Arc::new(AtomicBool::new(false)), 4, on_dir);
     let dirs = dirs.lock().unwrap().clone();
-    let grouped = group_models(root, &dirs);
+    let grouped = group_models(root, &dirs, &load_split_dirs(conn));
 
     let mut models = 0u32;
     let mut files = 0u32;
@@ -735,7 +745,7 @@ const WALK_THREADS: usize = 16;
 /// `GENERIC_SEGMENTS`/`is_generic_segment`; v4 = `GENERIC_SEGMENTS` widened to
 /// cover the support-state/slicer/process buckets common in miniature
 /// releases, e.g. `Presupported`/`Chitubox`/`FDM`).
-const SCAN_VERSION: i64 = 4;
+const SCAN_VERSION: i64 = 8;
 
 /// A message from a walker thread to the DB writer.
 /// (Retained for the `bench_walk` benchmark; the live scan uses `collect_tree`.)
@@ -931,20 +941,103 @@ fn collect_tree(
     }
 }
 
+/// Folders the user split by hand (see `split_dirs` in db.rs).
+fn load_split_dirs(conn: &Connection) -> HashSet<PathBuf> {
+    conn.prepare("SELECT path FROM split_dirs")
+        .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().map(PathBuf::from).collect()))
+        .unwrap_or_default()
+}
+
+/// How a model relates to shelves, derived from its id + stored folder (no extra
+/// column): a FILE model's id comes from a virtual dir, so it differs from the hash
+/// of its real folder. Returns (is_file_model, the split folder it came out of).
+fn shelf_facts(id: &str, folder: &str, split: &HashSet<PathBuf>) -> (bool, Option<String>) {
+    let file_model = id != format!("m{:x}", fnv1a(folder));
+    let parent: Option<&Path> = if file_model { Some(Path::new(folder)) } else { Path::new(folder).parent() };
+    let split_parent = parent.filter(|p| split.contains(*p)).map(|p| p.to_string_lossy().to_string());
+    (file_model, split_parent)
+}
+
+/// Name comparison key: letters and digits only, lower-cased — so
+/// `Watch_Stand`, `Watch Stand` and `watch-stand` are equal.
+fn norm_name(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
+}
+
+/// Where each folder model sits: (parent folder, normalised folder name) → folder.
+/// A loose-file model with the same name in that parent folder "belongs" there.
+fn folder_homes(conn: &Connection) -> HashMap<(String, String), String> {
+    let mut homes = HashMap::new();
+    let Ok(mut st) = conn.prepare("SELECT id, folder FROM models") else { return homes };
+    let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) else { return homes };
+    for (id, folder) in rows.flatten() {
+        if id != format!("m{:x}", fnv1a(&folder)) {
+            continue; // a file model has no folder of its own
+        }
+        let p = Path::new(&folder);
+        if let (Some(parent), Some(name)) = (p.parent(), p.file_name().and_then(|n| n.to_str())) {
+            homes.insert((parent.to_string_lossy().to_string(), norm_name(name)), folder.clone());
+        }
+    }
+    homes
+}
+
+/// The folder a loose-file model belongs in, if a same-named folder model sits
+/// next to it (shown as a hint — Trove itself never moves the file). `name` is the model's display name; a file model that had to step
+/// aside for its folder twin carries a " (file)" suffix, which doesn't count.
+fn belongs_to(file_model: bool, name: &str, folder: &str, homes: &HashMap<(String, String), String>) -> Option<String> {
+    if !file_model {
+        return None;
+    }
+    let base = name.strip_suffix(" (file)").or_else(|| name.strip_suffix(" (File)")).unwrap_or(name);
+    homes.get(&(folder.to_string(), norm_name(base))).cloned()
+}
+
 /// Group collected directories into models. A directory is a **model root** when it
 /// directly holds loose media (a printable OR an image); a directory of only
 /// subfolders is a container (creator/tier/category) whose children are models in
 /// their own right. Every directory's files are attributed to its nearest
 /// ancestor-or-self model root, so a model absorbs its whole subtree (nested STL
 /// folders → parts, any image → preview). Models with no printable are dropped.
-fn group_models(root: &Path, dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>) -> Vec<GroupedModel> {
+fn group_models(
+    root: &Path,
+    dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>,
+    split: &HashSet<PathBuf>,
+) -> Vec<GroupedModel> {
     // A "candidate" directly holds loose media: a model file (printable or .blend)
     // or an image.
-    let candidates: HashSet<PathBuf> = dirs
+    let mut candidates: HashSet<PathBuf> = dirs
         .iter()
         .filter(|(_, (files, _))| files.iter().any(|f| is_model_file(&f.ext) || is_image(&f.ext)))
         .map(|(p, _)| p.clone())
         .collect();
+    // The library root as a SHELF: loose model files sitting next to real model
+    // folders (e.g. a "3D Prints" folder with a few stray .3mf files beside the
+    // project folders). Left as a candidate, the root would be the shallowest one
+    // and swallow the entire library into a single model. So it stops being a
+    // candidate — its subfolders group on their own — and its loose model files
+    // become one model each further down. A root whose only media subfolders are
+    // generic buckets ("STLs", "Supported"…) is still ONE model: that is someone
+    // mounting a single model folder.
+    let root_is_shelf = dirs.get(root).is_some_and(|(files, _)| files.iter().any(|f| is_model_file(&f.ext)))
+        && candidates.iter().any(|p| {
+            p.strip_prefix(root)
+                .ok()
+                .and_then(|rel| rel.components().next())
+                .and_then(|c| c.as_os_str().to_str())
+                .is_some_and(|seg| !is_generic_segment(seg))
+        });
+    // Shelves: the root (when detected above) plus every folder the user split by
+    // hand (`split_dirs`). Below the root the same situation is ambiguous — loose
+    // files beside subfolders can be a category OR one model — so there it is the
+    // user's call, never a heuristic.
+    let mut shelves: Vec<&Path> = split.iter().filter(|p| p.starts_with(root)).map(|p| p.as_path()).collect();
+    if root_is_shelf && !split.contains(root) {
+        shelves.push(root);
+    }
+    for shelf in &shelves {
+        candidates.remove(*shelf);
+    }
     // A model root is the SHALLOWEST candidate in its chain — a candidate with no
     // candidate ancestor. So a model with loose images + nested STL subfolders is
     // one model (the top), while a container (no loose media) lets each child be a
@@ -989,6 +1082,28 @@ fn group_models(root: &Path, dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>) 
             e.0.extend(files.iter().map(|f| f.clone()));
             if *mt > e.1 {
                 e.1 = *mt;
+            }
+        }
+    }
+
+    // On a shelf, each loose model file is its own model, together with any
+    // same-stem siblings (fox.3mf + fox.png). The model gets a VIRTUAL directory
+    // `<shelf>/<stem>` — it only supplies a stable id and the display name; nothing
+    // is created on disk, and compute_record stores the real folder (the shelf).
+    // If a real folder already owns that path, the file model steps aside.
+    for shelf in &shelves {
+        if let Some((files, mt)) = dirs.get(*shelf) {
+            let mut by_stem: BTreeMap<String, Vec<ScannedFile>> = BTreeMap::new();
+            for f in files {
+                // Versions of one thing (hook_v1.3mf, hook_v2.3mf) are one model.
+                by_stem.entry(version_base(&stem_of(&f.name))).or_default().push(f.clone());
+            }
+            for (stem, group) in by_stem {
+                let mut vdir = shelf.join(&stem);
+                if dirs.keys().any(|d| d.starts_with(&vdir)) {
+                    vdir = shelf.join(format!("{stem} (file)"));
+                }
+                acc.insert(vdir, (group, *mt));
             }
         }
     }
@@ -1082,7 +1197,8 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
     }
 
     // ── Phase 2: group directories into models (a model absorbs its subtree) ──
-    let models = group_models(root, &dirs);
+    let split = db.0.lock().map(|c| load_split_dirs(&c)).unwrap_or_default();
+    let models = group_models(root, &dirs, &split);
 
     // ── Phase 3: incremental upsert (skip models whose subtree is unchanged) ──
     let mut seen: HashSet<String> = HashSet::new();
@@ -1239,12 +1355,40 @@ fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<Atom
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
+    // This pass opens these project files anyway, so it is also where a damaged
+    // one (an archive that doesn't open) is found and recorded — and skipped, so
+    // an older intact version can still give the model its picture.
+    let mut verdicts: Vec<(String, bool)> = Vec::new();
+    let rows: Vec<(String, String, String)> = rows
+        .into_iter()
+        .filter(|(_, path, ty)| {
+            if ty != "3mf" {
+                return true;
+            }
+            match archive_is_readable(Path::new(path)) {
+                Some(ok) => {
+                    verdicts.push((path.clone(), !ok));
+                    ok
+                }
+                None => false,
+            }
+        })
+        .collect();
+    if let Ok(conn) = db.0.lock() {
+        for (path, damaged) in &verdicts {
+            note_damaged(&conn, path, *damaged);
+        }
+    }
+    if verdicts.iter().any(|(_, damaged)| *damaged) {
+        let _ = app.emit("dataset-changed", ());
+    }
     // One candidate per model, preferring a .3mf over a .blend.
     let mut by_model: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
     for (id, path, ty) in rows {
         let e = by_model.entry(id).or_insert((None, None));
         if ty == "3mf" {
-            if e.0.is_none() { e.0 = Some(path); }
+            // The NEWEST version's project is the model's face (stand_v4 over stand).
+            if e.0.as_deref().is_none_or(|cur| newer_file(&path, cur)) { e.0 = Some(path); }
         } else if e.1.is_none() {
             e.1 = Some(path);
         }
@@ -1347,7 +1491,8 @@ fn stl_thumb_candidates(conn: &Connection, lib_id: &str) -> Vec<(String, String)
     let mut by_model: BTreeMap<String, (String, i64)> = BTreeMap::new();
     for (id, path, size) in rows {
         match by_model.get_mut(&id) {
-            Some(e) if size < e.1 => *e = (path, size),
+            // Newest version first; among equals, the smallest mesh (cheapest to render).
+            Some(e) if newer_file(&path, &e.0) || (!newer_file(&e.0, &path) && size < e.1) => *e = (path, size),
             Some(_) => {}
             None => {
                 by_model.insert(id, (path, size));
@@ -1546,6 +1691,37 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             agg.insert(mid, (tv, parts as u32));
         }
     }
+    // The part count must agree with the detail view, which merges one part's
+    // formats (see part_key): count distinct parts, not part files.
+    // The same pass spots duplicates: a part that has a "(n)" copy of a file.
+    let mut dup_models: HashSet<String> = HashSet::new();
+    {
+        // model → part key → (distinct file stems, any of them a copy?)
+        let mut keys: HashMap<String, HashMap<String, (HashSet<String>, bool)>> = HashMap::new();
+        let mut pstmt = conn.prepare("SELECT model_id, path FROM files WHERE is_part")?;
+        let prows = pstmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for (mid, path) in prows.flatten() {
+            let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+            let e = keys.entry(mid).or_default().entry(part_key(&path)).or_default();
+            e.1 |= is_copy(&path);
+            e.0.insert(stem);
+        }
+        for (mid, parts) in keys {
+            // A copy only counts as a duplicate next to the file it copies.
+            if parts.values().any(|(stems, has_copy)| *has_copy && stems.len() > 1) {
+                dup_models.insert(mid.clone());
+            }
+            if let Some(entry) = agg.get_mut(&mid) {
+                entry.1 = parts.len() as u32;
+            }
+        }
+    }
+    let name_overrides = model_name_overrides(conn);
+    // Models with a damaged file (one join, not a lookup per model).
+    let damaged_models: HashSet<String> = conn
+        .prepare("SELECT DISTINCT f.model_id FROM files f JOIN damaged_files d ON d.path = f.path")
+        .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect()))
+        .unwrap_or_default();
 
     // Batched tags for all models in one query.
     let mut tagmap: HashMap<String, Vec<String>> = HashMap::new();
@@ -1554,6 +1730,19 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
         let trows = tstmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         for row in trows.flatten() {
             tagmap.entry(row.0).or_default().push(row.1);
+        }
+    }
+
+    let split = load_split_dirs(conn);
+    let homes = folder_homes(conn);
+
+    // Batched user-set print statuses for all models in one query.
+    let mut statusmap: HashMap<String, String> = HashMap::new();
+    {
+        let mut sstmt = conn.prepare("SELECT model_id, status FROM print_status")?;
+        let srows = sstmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in srows.flatten() {
+            statusmap.insert(row.0, row.1);
         }
     }
 
@@ -1581,6 +1770,13 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
 
         let (file_types, parts_count) = agg.remove(&id).unwrap_or_default();
         let tags = tagmap.remove(&id).unwrap_or_default();
+        let print_status = statusmap.remove(&id).unwrap_or_default();
+        let (file_model, split_parent) = shelf_facts(&id, &folder, &split);
+        let belongs_to = belongs_to(file_model, &name, &folder, &homes);
+        let duplicates = dup_models.contains(&id);
+        let damaged = damaged_models.contains(&id);
+        // A user rename wins for display; `belongs_to` above used the real name.
+        let name = name_overrides.get(&id).cloned().unwrap_or(name);
 
         models.push(Model {
             id, name, creator, collection, geometry, color, tags,
@@ -1599,7 +1795,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             thumb,   // raw cache path; frontend resolves to an asset URL
             preview, // raw folder-image path; frontend resolves to an asset URL
             dim_w, dim_d, dim_h,
-            file_types, parts_count, real: true,
+            file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to, duplicates, damaged,
         });
     }
 
@@ -1738,6 +1934,160 @@ pub fn get_dataset(db: State<Db>) -> Result<Dataset, String> {
     build_dataset(&conn).map_err(|e| e.to_string())
 }
 
+/// Sort key of a file's version: (version numbers, letter suffix, copy number).
+/// `stand_v6.1b (2)` → ([6, 1], "b", 2). Ordered so that a higher version is
+/// newer, and a later copy of the same version is newer than the first.
+type VerKey = (Vec<u32>, String, u32);
+
+/// Read the version out of a file stem: (base name, sort key, label).
+///   `stand_v4`            → ("stand", ([4], "", 0), "v4")
+///   `Motor-V11h`          → ("Motor", ([11], "h", 0), "v11h")
+///   `Swatch+v6.1(2)`      → ("Swatch", ([6, 1], "", 2), "v6.1 (2)")
+///   `clip (2)`            → ("clip", ([], "", 2), "(2)")   — a copy of `clip`
+///   `clip`                → ("clip", None, "original")
+/// A version marker is `v` + numbers (dotted) + up to two letters, at the very
+/// end, not glued to an ASCII letter or digit (so `motorv8` is not a version). A
+/// copy marker is a trailing `(n)`, as browsers and file managers add to a
+/// second download or duplicate. None = the unmarked original, the oldest.
+fn name_version(stem: &str) -> (String, Option<VerKey>, String) {
+    let is_sep = |c: char| c == '_' || c == '-' || c == ' ' || c == '.' || c == '+';
+
+    // 1) trailing "(n)" → copy number.
+    let mut rest = stem.trim_end();
+    let mut copy = 0u32;
+    if let Some(inner) = rest.strip_suffix(')').and_then(|r| r.rfind('(').map(|at| (at, &r[at + 1..]))) {
+        let (at, digits) = inner;
+        if !digits.is_empty() && digits.len() <= 3 && digits.chars().all(|c| c.is_ascii_digit()) {
+            let head = rest[..at].trim_end_matches(is_sep);
+            if !head.is_empty() {
+                copy = digits.parse().unwrap_or(0);
+                rest = head;
+            }
+        }
+    }
+
+    // 2) trailing "v<n>[.<n>…][letters]" → version.
+    let version = (|| {
+        let at = rest.rfind(|c| c == 'v' || c == 'V')?;
+        if rest[..at].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric()) {
+            return None; // glued to a word: "motorv8"
+        }
+        let base = rest[..at].trim_end_matches(is_sep);
+        if base.is_empty() {
+            return None;
+        }
+        let tail = &rest[at + 1..];
+        let num_len = tail.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(tail.len());
+        let (nums_str, suffix) = tail.split_at(num_len);
+        let nums: Vec<u32> = nums_str.split('.').map(|n| n.parse::<u32>().ok()).collect::<Option<Vec<u32>>>()?;
+        if nums_str.len() > 12 || suffix.len() > 2 || !suffix.chars().all(|c| c.is_ascii_alphabetic()) {
+            return None;
+        }
+        Some((base.to_string(), nums, nums_str.to_string(), suffix.to_lowercase()))
+    })();
+
+    match version {
+        Some((base, nums, shown, suffix)) => {
+            let label = if copy > 0 { format!("v{shown}{suffix} ({copy})") } else { format!("v{shown}{suffix}") };
+            (base, Some((nums, suffix, copy)), label)
+        }
+        None if copy > 0 => (rest.to_string(), Some((Vec::new(), String::new(), copy)), format!("({copy})")),
+        None => (stem.to_string(), None, "original".to_string()),
+    }
+}
+
+/// A stem without its version/copy marker (`stand_v4` → `stand`); unchanged when it has none.
+fn version_base(stem: &str) -> String {
+    name_version(stem).0
+}
+
+fn damaged_paths(conn: &Connection) -> HashSet<String> {
+    conn.prepare("SELECT path FROM damaged_files")
+        .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect()))
+        .unwrap_or_default()
+}
+
+/// Whether a .3mf opens as an archive at all. A copy that was cut short has its
+/// file headers but no central directory, so this is false for it. Reads only
+/// the end of the file. A file that can't be opened for another reason (gone,
+/// no permission) is NOT reported as damaged.
+fn archive_is_readable(path: &Path) -> Option<bool> {
+    let file = std::fs::File::open(path).ok()?;
+    Some(zip::ZipArchive::new(std::io::BufReader::new(file)).is_ok())
+}
+
+/// Record whether a project file is damaged (insert) or fine (remove).
+fn note_damaged(conn: &Connection, path: &str, damaged: bool) {
+    let _ = if damaged {
+        conn.execute("INSERT OR IGNORE INTO damaged_files (path) VALUES (?1)", params![path])
+    } else {
+        conn.execute("DELETE FROM damaged_files WHERE path=?1", params![path])
+    };
+}
+
+/// True when file `a` is a newer version than file `b`, going by their names.
+fn newer_file(a: &str, b: &str) -> bool {
+    let key = |p: &str| name_version(Path::new(p).file_stem().and_then(|s| s.to_str()).unwrap_or("")).1;
+    key(a) > key(b)
+}
+
+/// True when a file's name carries a "(n)" copy marker.
+fn is_copy(path: &str) -> bool {
+    let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    name_version(stem).1.is_some_and(|(_, _, copy)| copy > 0)
+}
+
+/// User-given display names for models (kind 'model' in `name_overrides`), by id.
+fn model_name_overrides(conn: &Connection) -> HashMap<String, String> {
+    conn.prepare("SELECT id, name FROM name_overrides WHERE kind='model'")
+        .and_then(|mut st| {
+            st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map(|rows| rows.flatten().collect())
+        })
+        .unwrap_or_default()
+}
+
+/// Identity of a part within a model: its folder + file stem (minus any version
+/// marker), case-insensitively. Files that share it are the same part — in
+/// different formats and/or versions.
+fn part_key(path: &str) -> String {
+    let p = Path::new(path);
+    let dir = p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(path);
+    format!("{dir}\u{0}{}", version_base(stem).to_lowercase())
+}
+
+/// Turn a part's files into versions when their names carry at least two
+/// different version/copy markers (a file without one counts as "original", the
+/// oldest). The part is then named after the shared base and `files` becomes the
+/// newest version's; otherwise the part is left exactly as it is.
+fn apply_versions(part: &mut Part) {
+    let mut groups: BTreeMap<Option<VerKey>, PartVersion> = BTreeMap::new();
+    for f in &part.files {
+        let (_, key, label) = name_version(&stem_of(&f.name));
+        groups.entry(key).or_insert_with(|| PartVersion { label, files: Vec::new() }).files.push(f.clone());
+    }
+    if groups.len() < 2 {
+        return;
+    }
+    // BTreeMap order is None (original) first, then ascending — reverse for newest first.
+    let mut versions: Vec<PartVersion> = groups.into_values().rev().collect();
+    for v in &mut versions {
+        v.files.sort_by_key(|f| format_rank(&f.ftype));
+    }
+    part.name = version_base(&stem_of(&part.files[0].name));
+    part.files = versions[0].files.clone();
+    part.versions = versions;
+}
+
+/// Viewer preference among a part's formats: meshes that load fast and reliably
+/// first, then project/CAD formats.
+fn format_rank(ext: &str) -> usize {
+    ["stl", "obj", "3mf", "step", "stp"]
+        .iter()
+        .position(|e| e.eq_ignore_ascii_case(ext))
+        .unwrap_or(usize::MAX)
+}
+
 /// Hydrate one model with the heavy fields the grid omits (full files, parts,
 /// extras, folder, desc) — fetched on demand when the detail view opens. Returns
 /// None if the id is gone (e.g. removed by a rescan between grid load and click).
@@ -1777,27 +2127,42 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
             r.get::<_, String>(5)?, r.get::<_, String>(6)?,
         ))
     })?;
+    let damaged = damaged_paths(conn);
     let mut files: Vec<ModelFile> = Vec::new();
     let mut parts: Vec<Part> = Vec::new();
     let mut extras: Vec<ModelFile> = Vec::new();
     let mut file_types: Vec<String> = Vec::new();
-    let mut pidx = 0;
+    // One part per (folder, file stem): `arm.stl`, `arm.step` and `arm.3mf` side by
+    // side are the SAME part in three formats, not three parts.
+    let mut part_at: HashMap<String, usize> = HashMap::new();
     for fr in frows {
         let (fname, ftype, size, path, is_part, fgeo, fcol) = fr?;
         if !file_types.contains(&ftype) { file_types.push(ftype.clone()); }
-        let mf = ModelFile { name: fname.clone(), ftype: ftype.clone(), size, path: Some(path) };
+        let key = part_key(&path);
+        let mf = ModelFile { name: fname.clone(), ftype: ftype.clone(), size, damaged: damaged.contains(&path), path: Some(path) };
         files.push(mf.clone());
         if is_part {
-            parts.push(Part { id: format!("{}-p{}", id, pidx), name: stem_of(&fname), geometry: fgeo, color: fcol, files: vec![mf] });
-            pidx += 1;
+            match part_at.get(&key) {
+                Some(&i) => parts[i].files.push(mf),
+                None => {
+                    part_at.insert(key, parts.len());
+                    parts.push(Part { id: format!("{}-p{}", id, parts.len()), name: stem_of(&fname), geometry: fgeo, color: fcol, files: vec![mf], versions: Vec::new() });
+                }
+            }
         } else {
             extras.push(mf);
         }
     }
+    // Within a part, the format the viewer loads most reliably comes first; then
+    // fold version-marked files (stand_v2, stand_v3…) into the part's versions.
+    for p in &mut parts {
+        p.files.sort_by_key(|f| format_rank(&f.ftype));
+        apply_versions(p);
+    }
     let parts_count = parts.iter().filter(|p| !p.files.is_empty()).count() as u32;
     if parts.is_empty() {
         // safety: a model always has at least one part for the viewer
-        parts.push(Part { id: format!("{}-p0", id), name: name.clone(), geometry: geometry.clone(), color: color.clone(), files: vec![] });
+        parts.push(Part { id: format!("{}-p0", id), name: name.clone(), geometry: geometry.clone(), color: color.clone(), files: vec![], versions: Vec::new() });
     }
 
     let tags: Vec<String> = conn
@@ -1806,13 +2171,21 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
         .filter_map(|t| t.ok())
         .collect();
 
+    let print_status = print_status_of(conn, &id);
+    let (file_model, split_parent) = shelf_facts(&id, &folder, &load_split_dirs(conn));
+    let belongs_to = belongs_to(file_model, &name, &folder, &folder_homes(conn));
+    let duplicates = files.iter().any(|f| f.path.as_deref().is_some_and(is_copy))
+        && parts.iter().any(|p| p.versions.iter().any(|v| v.label.ends_with(')')));
+    let name = model_name_overrides(conn).remove(&id).unwrap_or(name);
+    let damaged = files.iter().any(|f| f.damaged);
+
     Ok(Some(Model {
         id, name, creator, collection, geometry, color, tags, files,
         license, source, source_url, supports, added, liked: false, desc, folder,
         parts, extras,
         print_time: None, filament: None, makes: None, volume: None,
         file_count, total_size, thumb, preview, dim_w, dim_d, dim_h,
-        file_types, parts_count, real: true,
+        file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to, duplicates, damaged,
     }))
 }
 
@@ -1832,6 +2205,23 @@ pub fn rename_creator(db: State<Db>, id: String, name: String) -> Result<Dataset
     }
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     set_name_override(&conn, "creator", &id, trimmed).map_err(|e| e.to_string())?;
+    build_dataset(&conn).map_err(|e| e.to_string())
+}
+
+/// Give a model a display name of the user's choosing (index only — the files
+/// and folders keep their names). An empty name removes the override, bringing
+/// back the name derived from the folder/file. Survives rescans; searchable.
+#[tauri::command]
+pub fn rename_model(db: State<Db>, id: String, name: String) -> Result<Dataset, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        conn.execute("DELETE FROM name_overrides WHERE kind='model' AND id=?1", params![id])
+            .map_err(|e| e.to_string())?;
+    } else {
+        set_name_override(&conn, "model", &id, trimmed).map_err(|e| e.to_string())?;
+    }
+    let _ = rebuild_fts(&conn); // so search finds the model by its new name
     build_dataset(&conn).map_err(|e| e.to_string())
 }
 
@@ -1904,6 +2294,482 @@ pub fn delete_collection(db: State<Db>, id: String) -> Result<Dataset, String> {
     conn.execute("DELETE FROM user_collections WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
     build_dataset(&conn).map_err(|e| e.to_string())
+}
+
+/// The statuses a model can carry. "" clears it (no row).
+const PRINT_STATUSES: [&str; 2] = ["queued", "printed"];
+
+fn print_status_of(conn: &Connection, model_id: &str) -> String {
+    conn.query_row("SELECT status FROM print_status WHERE model_id=?1", params![model_id], |r| r.get::<_, String>(0))
+        .optional()
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Store (or, for "", clear) a model's print status. Kept in its own table so it
+/// survives rescans, which delete and re-insert `models` rows.
+fn write_print_status(conn: &Connection, model_id: &str, status: &str) -> Result<(), String> {
+    if status.is_empty() {
+        conn.execute("DELETE FROM print_status WHERE model_id=?1", params![model_id])
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    if !PRINT_STATUSES.contains(&status) {
+        return Err(format!("Unknown print status '{status}'"));
+    }
+    conn.execute(
+        "INSERT INTO print_status (model_id,status,updated) VALUES (?1,?2,datetime('now'))
+         ON CONFLICT(model_id) DO UPDATE SET status=?2, updated=datetime('now')",
+        params![model_id, status],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Set a model's print status ("" | "queued" | "printed"). Returns the rebuilt dataset.
+#[tauri::command]
+pub fn set_print_status(db: State<Db>, model_id: String, status: String) -> Result<Dataset, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    write_print_status(&conn, &model_id, &status)?;
+    build_dataset(&conn).map_err(|e| e.to_string())
+}
+
+/// Kick a rescan of the library that contains `dir` (after its grouping changed).
+fn rescan_library_of(app: &tauri::AppHandle, db: &State<Db>, dir: &Path) -> Result<Vec<Library>, String> {
+    let (id, path, watch): (String, String, i64) = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let mut st = conn.prepare("SELECT id, path, watch FROM libraries").map_err(|e| e.to_string())?;
+        let libs: Vec<(String, String, i64)> = st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .collect();
+        // The deepest library root that contains the folder (libraries can nest).
+        let lib = libs
+            .into_iter()
+            .filter(|(_, p, _)| dir.starts_with(p))
+            .max_by_key(|(_, p, _)| p.len())
+            .ok_or("That folder isn't inside a library.")?;
+        conn.execute("UPDATE libraries SET status='scanning' WHERE id=?1", params![lib.0])
+            .map_err(|e| e.to_string())?;
+        lib
+    };
+    spawn_scan(app, id, path, watch != 0, false);
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    list_libs(&conn).map_err(|e| e.to_string())
+}
+
+/// Split a folder model into separate models: each loose model file in its folder
+/// becomes its own model and each subfolder groups on its own. Only the index
+/// changes — nothing on disk moves. Starts a rescan; returns the libraries.
+#[tauri::command]
+pub fn split_folder(app: tauri::AppHandle, db: State<Db>, model_id: String) -> Result<Vec<Library>, String> {
+    let folder: String = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let folder: String = conn
+            .query_row("SELECT folder FROM models WHERE id=?1", params![model_id], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or("That model is no longer in the index.")?;
+        if shelf_facts(&model_id, &folder, &HashSet::new()).0 {
+            return Err("A single-file model can't be split.".into());
+        }
+        conn.execute("INSERT OR IGNORE INTO split_dirs (path) VALUES (?1)", params![folder])
+            .map_err(|e| e.to_string())?;
+        folder
+    };
+    rescan_library_of(&app, &db, Path::new(&folder))
+}
+
+/// Undo `split_folder` for `path`: the folder is indexed as one model again.
+#[tauri::command]
+pub fn unsplit_folder(app: tauri::AppHandle, db: State<Db>, path: String) -> Result<Vec<Library>, String> {
+    {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM split_dirs WHERE path=?1", params![path])
+            .map_err(|e| e.to_string())?;
+    }
+    rescan_library_of(&app, &db, Path::new(&path))
+}
+
+/// Value of `<metadata key="KEY" value="…"/>` inside an XML fragment — enough
+/// for the flat key/value config a slicer project carries, without an XML parser.
+fn xml_meta(fragment: &str, key: &str) -> Option<String> {
+    let at = fragment.find(&format!("key=\"{key}\""))?;
+    let rest = &fragment[at..];
+    let v = rest.find("value=\"")? + "value=\"".len();
+    let end = rest[v..].find('"')?;
+    Some(
+        rest[v..v + end]
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&"),
+    )
+}
+
+/// (plate number, name) for every `<plate>` in a project's
+/// `Metadata/model_settings.config` (Bambu Studio / OrcaSlicer), in file order.
+fn parse_plates_config(xml: &str) -> Vec<(u32, String)> {
+    xml.split("<plate>")
+        .skip(1)
+        .filter_map(|seg| {
+            let seg = seg.split("</plate>").next().unwrap_or(seg);
+            // Only the plate's own metadata — stop before its object instances.
+            let head = seg.split("<model_instance>").next().unwrap_or(seg);
+            let id: u32 = xml_meta(head, "plater_id")?.trim().parse().ok()?;
+            Some((id, xml_meta(head, "plater_name").unwrap_or_default().trim().to_string()))
+        })
+        .collect()
+}
+
+/// Plate number from a preview entry name: `Metadata/plate_3.png` → 3. The
+/// `_small`, `no_light`, `top_` and `pick_` variants are not plate previews.
+fn plate_png_index(entry: &str) -> Option<u32> {
+    let lower = entry.to_lowercase();
+    let file = lower.rsplit('/').next()?;
+    file.strip_prefix("plate_")?.strip_suffix(".png")?.parse().ok()
+}
+
+/// Read a slicer project's plates: (number, name, preview PNG bytes). Names come
+/// from the project config; a project without one still lists the plates it has
+/// previews for. Bounded reads — a project can be hundreds of MB, but only the
+/// small config and preview entries are touched.
+fn read_3mf_plates(path: &Path) -> Vec<(u32, String, Option<Vec<u8>>)> {
+    use std::io::Read;
+    const MAX_CONFIG: u64 = 16 * 1024 * 1024;
+    const MAX_PNG: u64 = 8 * 1024 * 1024;
+    let Ok(file) = std::fs::File::open(path) else { return Vec::new() };
+    let Ok(mut zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) else { return Vec::new() };
+    let names: Vec<String> = (0..zip.len())
+        .filter_map(|i| zip.by_index(i).ok().map(|f| f.name().to_string()))
+        .collect();
+
+    let mut plates: BTreeMap<u32, String> = BTreeMap::new();
+    if let Some(cfg) = names.iter().find(|n| n.to_lowercase().ends_with("metadata/model_settings.config")) {
+        if let Ok(entry) = zip.by_name(cfg) {
+            let mut xml = String::new();
+            if entry.take(MAX_CONFIG).read_to_string(&mut xml).is_ok() {
+                plates.extend(parse_plates_config(&xml));
+            }
+        }
+    }
+    // Small preview when there is one (it's what a list row needs), else the full one.
+    let mut pngs: BTreeMap<u32, String> = BTreeMap::new();
+    for n in &names {
+        if let Some(i) = plate_png_index(n) {
+            pngs.insert(i, n.clone());
+            plates.entry(i).or_default();
+        }
+    }
+    for n in &names {
+        let small = n.to_lowercase();
+        if let Some(i) = small.strip_suffix("_small.png").and_then(|b| plate_png_index(&format!("{b}.png"))) {
+            if plates.contains_key(&i) {
+                pngs.insert(i, n.clone());
+            }
+        }
+    }
+
+    plates
+        .into_iter()
+        .map(|(i, name)| {
+            let png = pngs.get(&i).and_then(|n| {
+                let entry = zip.by_name(n).ok()?;
+                let mut buf = Vec::new();
+                entry.take(MAX_PNG).read_to_end(&mut buf).ok()?;
+                (!buf.is_empty()).then_some(buf)
+            });
+            (i, name, png)
+        })
+        .collect()
+}
+
+/// Plates of a project file with their previews written to `cache_dir`, cached
+/// by (path, size, mtime) so a repeat visit never reopens the project file —
+/// which matters when the library is on a network share.
+fn cached_plates(path: &Path, cache_dir: &Path) -> Vec<Plate> {
+    let (size, mtime) = std::fs::metadata(path)
+        .map(|m| (m.len(), m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0)))
+        .unwrap_or((0, 0));
+    let key = format!("{:x}", fnv1a(&format!("{}|{size}|{mtime}", path.to_string_lossy())));
+    let index = cache_dir.join(format!("{key}.json"));
+    if let Some(cached) = std::fs::read(&index).ok().and_then(|b| serde_json::from_slice::<Vec<Plate>>(&b).ok()) {
+        return cached;
+    }
+    let _ = std::fs::create_dir_all(cache_dir);
+    let plates: Vec<Plate> = read_3mf_plates(path)
+        .into_iter()
+        .map(|(i, name, png)| {
+            let thumb = png.and_then(|bytes| {
+                let out = cache_dir.join(format!("{key}_{i}.png"));
+                std::fs::write(&out, bytes).ok().map(|_| out.to_string_lossy().to_string())
+            });
+            Plate { index: i, name, thumb, printed: false }
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_vec(&plates) {
+        let _ = std::fs::write(&index, json);
+    }
+    plates
+}
+
+fn printed_plates(conn: &Connection, path: &str) -> HashSet<u32> {
+    conn.prepare("SELECT plate FROM plate_status WHERE file_path=?1")
+        .and_then(|mut st| st.query_map(params![path], |r| r.get::<_, i64>(0)).map(|rows| rows.flatten().map(|n| n as u32).collect()))
+        .unwrap_or_default()
+}
+
+fn write_plate_printed(conn: &Connection, path: &str, plate: u32, printed: bool) -> Result<(), String> {
+    if printed {
+        conn.execute(
+            "INSERT OR IGNORE INTO plate_status (file_path,plate,printed_at) VALUES (?1,?2,datetime('now'))",
+            params![path, plate],
+        )
+    } else {
+        conn.execute("DELETE FROM plate_status WHERE file_path=?1 AND plate=?2", params![path, plate])
+    }
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// The build plates of an indexed slicer project (.3mf), each with its preview
+/// and whether the user ticked it off as printed. Empty for a file that isn't a
+/// slicer project. Reads the project once, then serves from the cache.
+#[tauri::command]
+pub fn get_plates(app: tauri::AppHandle, db: State<Db>, path: String) -> Result<Vec<Plate>, String> {
+    {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        require_indexed_file(&conn, &path)?;
+    } // No DB lock while reading the project file.
+    let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("plates");
+    let mut plates = cached_plates(Path::new(&path), &cache);
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let printed = printed_plates(&conn, &path);
+    for p in &mut plates {
+        p.printed = printed.contains(&p.index);
+    }
+    Ok(plates)
+}
+
+/// Tick a plate of a project file off as printed (or untick it).
+#[tauri::command]
+pub fn set_plate_printed(db: State<Db>, path: String, plate: u32, printed: bool) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    require_indexed_file(&conn, &path)?;
+    write_plate_printed(&conn, &path, plate, printed)
+}
+
+/// Setting key for the CAD program "Edit in CAD" starts (a command line, the
+/// file appended as its last argument). Empty/absent = SolidCraft when installed.
+const CAD_SETTING: &str = "cad_command";
+const DEFAULT_CAD_BIN: &str = "solidcraft";
+
+fn on_path(bin: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else { return false };
+    std::env::split_paths(&paths).any(|dir| {
+        let p = dir.join(bin);
+        p.is_file() || p.with_extension("exe").is_file()
+    })
+}
+
+/// The argv that opens `file` in the CAD program, plus the name to show for it.
+/// `custom` is the user's command; without one, SolidCraft is used if `default_ok`.
+fn cad_argv(custom: &str, file: &str, default_ok: bool) -> Result<(Vec<String>, String), String> {
+    let mut argv: Vec<String> = custom.split_whitespace().map(|w| w.to_string()).collect();
+    let name = if argv.is_empty() {
+        if !default_ok {
+            return Err("No CAD program found. Enter one in Settings → Libraries → CAD.".into());
+        }
+        argv.push(DEFAULT_CAD_BIN.to_string());
+        "SolidCraft".to_string()
+    } else {
+        "CAD".to_string()
+    };
+    argv.push(file.to_string());
+    Ok((argv, name))
+}
+
+fn setting_value(conn: &Connection, key: &str) -> Result<String, String> {
+    conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get::<_, String>(0))
+        .optional()
+        .map(|v| v.unwrap_or_default())
+        .map_err(|e| e.to_string())
+}
+
+/// The file must be one Trove indexed and still be on disk — handoff commands
+/// never launch anything on an arbitrary path from the webview.
+fn require_indexed_file(conn: &Connection, path: &str) -> Result<(), String> {
+    let known: bool = conn
+        .query_row("SELECT 1 FROM files WHERE path=?1 LIMIT 1", params![path], |_| Ok(true))
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(false);
+    if !known {
+        return Err("That file isn't in the index.".into());
+    }
+    Ok(())
+}
+
+fn spawn_detached(argv: &[String], what: &str) -> Result<(), String> {
+    std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Couldn't start the {what} ({}): {e}", argv[0]))
+}
+
+/// Name of the CAD program "Edit in …" would start, or None when there is none
+/// (no command set and SolidCraft isn't installed) — the UI hides the button then.
+#[tauri::command]
+pub fn cad_name(db: State<Db>) -> Result<Option<String>, String> {
+    let custom = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        setting_value(&conn, CAD_SETTING)?
+    };
+    Ok(cad_argv(&custom, "", on_path(DEFAULT_CAD_BIN)).ok().map(|(_, name)| name))
+}
+
+/// Hand one indexed model file to the CAD program for editing. Trove only starts
+/// the program; whatever it saves is its own business (and shows up on rescan).
+#[tauri::command]
+pub fn open_in_cad(db: State<Db>, path: String) -> Result<(), String> {
+    let custom = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        require_indexed_file(&conn, &path)?;
+        setting_value(&conn, CAD_SETTING)?
+    }; // DB lock released before spawning.
+    if !Path::new(&path).is_file() {
+        return Err("That file is no longer on disk.".into());
+    }
+    let (argv, _) = cad_argv(&custom, &path, on_path(DEFAULT_CAD_BIN))?;
+    spawn_detached(&argv, "CAD program")
+}
+
+/// Setting keys: which slicer "Open in slicer" starts ("bambu" | "orca" |
+/// "custom"; absent = "bambu"), and the command line used for "custom".
+const SLICER_APP_SETTING: &str = "slicer_app";
+const SLICER_SETTING: &str = "slicer_command";
+
+/// Where one known slicer lives on each platform.
+struct SlicerApp {
+    name: &'static str,
+    /// Flatpak application ids, most likely first.
+    flatpak_ids: &'static [&'static str],
+    /// Executable name on PATH (Linux).
+    bin: &'static str,
+    /// Application name for `open -a` (macOS).
+    mac_app: &'static str,
+    /// Default install path (Windows).
+    win_path: &'static str,
+}
+
+const BAMBU_STUDIO: SlicerApp = SlicerApp {
+    name: "Bambu Studio",
+    flatpak_ids: &["com.bambulab.BambuStudio"],
+    bin: "bambu-studio",
+    mac_app: "BambuStudio",
+    win_path: "C:\\Program Files\\Bambu Studio\\bambu-studio.exe",
+};
+const ORCA_SLICER: SlicerApp = SlicerApp {
+    name: "OrcaSlicer",
+    flatpak_ids: &["io.github.softfever.OrcaSlicer", "com.orcaslicer.OrcaSlicer"],
+    bin: "orca-slicer",
+    mac_app: "OrcaSlicer",
+    win_path: "C:\\Program Files\\OrcaSlicer\\orca-slicer.exe",
+};
+
+/// The known slicer for a `slicer_app` setting value; None for "custom".
+/// Anything unrecognised (including unset) is Bambu Studio, the default.
+fn slicer_app(key: &str) -> Option<&'static SlicerApp> {
+    match key {
+        "custom" => None,
+        "orca" => Some(&ORCA_SLICER),
+        _ => Some(&BAMBU_STUDIO),
+    }
+}
+
+/// What the host offers for launching a known slicer — probed at click time and
+/// passed in, so `slicer_argv` stays a pure function the tests can drive.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SlicerProbe {
+    /// The installed Flatpak id of the slicer, if any (Linux).
+    pub flatpak: Option<String>,
+    /// Its executable is on PATH (Linux).
+    pub on_path: bool,
+}
+
+/// Build the argv that opens `file` in the slicer chosen by `app_key`. For
+/// "custom", `custom` is the user's command from Settings: split on whitespace,
+/// with the file appended as the last argument (never interpolated into a shell
+/// — there is no shell). For a known slicer, use wherever this OS keeps it.
+fn slicer_argv(app_key: &str, custom: &str, file: &str, os: &str, probe: &SlicerProbe) -> Result<Vec<String>, String> {
+    let Some(app) = slicer_app(app_key) else {
+        let mut argv: Vec<String> = custom.split_whitespace().map(|w| w.to_string()).collect();
+        if argv.is_empty() {
+            return Err("No slicer command set. Enter one in Settings → Libraries → Slicer.".into());
+        }
+        argv.push(file.to_string());
+        return Ok(argv);
+    };
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    match os {
+        "macos" => Ok(s(&["open", "-a", app.mac_app, file])),
+        "windows" => Ok(s(&[app.win_path, file])),
+        // A native install beats the Flatpak: it starts faster and sees the file
+        // without portal forwarding.
+        _ if probe.on_path => Ok(s(&[app.bin, file])),
+        _ => match &probe.flatpak {
+            Some(id) => Ok(s(&["flatpak", "run", "--file-forwarding", id, "@@", file, "@@"])),
+            None => Err(format!(
+                "{} wasn't found. Pick another slicer in Settings → Libraries → Slicer.",
+                app.name
+            )),
+        },
+    }
+}
+
+fn probe_slicer(app: &SlicerApp) -> SlicerProbe {
+    if !cfg!(target_os = "linux") {
+        return SlicerProbe::default();
+    }
+    let ok = |cmd: &str, args: &[&str]| {
+        std::process::Command::new(cmd)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|st| st.success())
+            .unwrap_or(false)
+    };
+    SlicerProbe {
+        on_path: ok("sh", &["-c", &format!("command -v {}", app.bin)]),
+        flatpak: app.flatpak_ids.iter().find(|id| ok("flatpak", &["info", id])).map(|id| id.to_string()),
+    }
+}
+
+/// Hand one indexed model file to the slicer chosen in Settings (Bambu Studio by
+/// default). The path must be a file Trove indexed — this never launches anything
+/// on an arbitrary path from the webview. Trove only starts the slicer; it
+/// doesn't touch the file.
+#[tauri::command]
+pub fn open_in_slicer(db: State<Db>, path: String) -> Result<(), String> {
+    let (app_key, custom) = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        require_indexed_file(&conn, &path)?;
+        (setting_value(&conn, SLICER_APP_SETTING)?, setting_value(&conn, SLICER_SETTING)?)
+    }; // DB lock released before probing/spawning.
+    if !Path::new(&path).is_file() {
+        return Err("That file is no longer on disk.".into());
+    }
+    let probe = slicer_app(&app_key).map(probe_slicer).unwrap_or_default();
+    let argv = slicer_argv(&app_key, &custom, &path, std::env::consts::OS, &probe)?;
+    spawn_detached(&argv, "slicer")
 }
 
 #[tauri::command]
@@ -2117,6 +2983,7 @@ fn rebuild_fts(conn: &Connection) -> rusqlite::Result<()> {
         "INSERT INTO search_fts (kind, ref_id, text)
          SELECT 'folder', m.id,
                 m.name || ' ' ||
+                COALESCE((SELECT o.name FROM name_overrides o WHERE o.kind='model' AND o.id=m.id) || ' ', '') ||
                 REPLACE(REPLACE(REPLACE(
                     CASE WHEN SUBSTR(m.folder, 1, LENGTH(l.path)) = l.path
                          THEN SUBSTR(m.folder, LENGTH(l.path) + 1)
@@ -2463,7 +3330,7 @@ mod tests {
             Arc::new(move |p, f, m| { d2.lock().unwrap().insert(p, (f, m)); });
         collect_tree(root, Arc::new(AtomicBool::new(false)), 4, on_dir);
         let map = dirs.lock().unwrap().clone();
-        group_models(root, &map)
+        group_models(root, &map, &HashSet::new())
     }
 
     #[test]
@@ -2646,6 +3513,557 @@ mod tests {
         assert!(ds.collections.iter().filter(|c| c.id != "uc1").all(|c| c.members.is_none()));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shelf_root_splits_loose_files_into_models() {
+        let root = std::env::temp_dir().join(format!("trove_shelf_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // Loose files in the library root, next to real project folders.
+        touch(&root.join("Cable Clip.3mf"), 900);
+        touch(&root.join("Cable Clip.png"), 300); // same stem → joins the model
+        touch(&root.join("Hook.stl"), 700);
+        touch(&root.join("Hook_v2.stl"), 700); // a version of Hook → same model
+        touch(&root.join("notes.txt"), 10); // no model file with this stem → dropped
+        touch(&root.join("Motor/housing.stl"), 1500);
+        touch(&root.join("Motor/Parts/rotor.stl"), 1500);
+        // A loose file whose stem collides with a real folder keeps both apart.
+        touch(&root.join("Motor.3mf"), 800);
+
+        let models = group(&root);
+        let mut names: Vec<String> = models.iter().map(|g| file_name(&g.dir)).collect();
+        names.sort();
+        assert_eq!(names, vec!["Cable Clip", "Hook", "Motor", "Motor (file)"], "got {names:?}");
+
+        let by = |n: &str| models.iter().find(|g| file_name(&g.dir) == n).unwrap();
+        assert_eq!(by("Cable Clip").files.len(), 2, "same-stem image joins its model");
+        assert_eq!(by("Hook").files.len(), 2, "versions of a loose file are one model");
+        assert_eq!(by("Motor").files.len(), 2, "the folder model keeps its whole subtree");
+        assert_eq!(by("Motor (file)").files.len(), 1);
+
+        // The virtual dir gives distinct, stable ids; the stored folder is the real one.
+        let rec = compute_record(&root, &by("Hook").dir, 0, by("Hook").files.clone());
+        assert_eq!(rec.name, "Hook");
+        assert_eq!(rec.folder, root.to_string_lossy());
+        let motor = compute_record(&root, &by("Motor").dir, 0, by("Motor").files.clone());
+        assert_eq!(motor.folder, root.join("Motor").to_string_lossy());
+        let ids: HashSet<String> = models
+            .iter()
+            .map(|g| compute_record(&root, &g.dir, 0, g.files.clone()).id)
+            .collect();
+        assert_eq!(ids.len(), 4, "every model has its own id");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn split_folder_becomes_a_shelf_and_can_be_regrouped() {
+        let root = std::env::temp_dir().join(format!("trove_split_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // A category folder: loose files that are separate things + one project folder.
+        touch(&root.join("Mounts/Clamp.stl"), 700);
+        touch(&root.join("Mounts/Hook.3mf"), 900);
+        touch(&root.join("Mounts/Hook.jpg"), 300);
+        touch(&root.join("Mounts/Monitor Arm/arm.stl"), 1500);
+        touch(&root.join("Mounts/Monitor Arm/base.stl"), 1500);
+        touch(&root.join("Motor/housing.stl"), 1500);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        let names = |conn: &Connection| {
+            let mut v: Vec<String> = build_dataset(conn).unwrap().models.iter().map(|m| m.name.clone()).collect();
+            v.sort();
+            v
+        };
+
+        // Unsplit: the category folder is ONE model that owns its whole subtree.
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(names(&conn), vec!["Motor", "Mounts"]);
+        let ds = build_dataset(&conn).unwrap();
+        assert!(ds.models.iter().all(|m| !m.file_model && m.split_parent.is_none()));
+
+        // Split it: loose files → one model each, the subfolder → its own model.
+        let mounts = root.join("Mounts").to_string_lossy().to_string();
+        conn.execute("INSERT INTO split_dirs (path) VALUES (?1)", params![mounts]).unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(names(&conn), vec!["Clamp", "Hook", "Monitor Arm", "Motor"]);
+        let ds = build_dataset(&conn).unwrap();
+        let by = |n: &str| ds.models.iter().find(|m| m.name == n).unwrap();
+        assert!(by("Clamp").file_model && by("Hook").file_model);
+        assert!(!by("Monitor Arm").file_model && !by("Motor").file_model);
+        assert_eq!(by("Hook").file_count, 2, "same-stem image stays with its file model");
+        assert_eq!(by("Monitor Arm").file_count, 2);
+        // Everything that came out of the split knows where to regroup; Motor doesn't.
+        for n in ["Clamp", "Hook", "Monitor Arm"] {
+            assert_eq!(by(n).split_parent.as_deref(), Some(mounts.as_str()), "{n}");
+        }
+        assert!(by("Motor").split_parent.is_none());
+        // A file model's folder is the real folder its file is in.
+        assert_eq!(by("Clamp").folder, mounts);
+        // The hydrated record agrees with the slim one.
+        let full = build_model_full(&conn, &by("Clamp").id).unwrap().unwrap();
+        assert!(full.file_model);
+        assert_eq!(full.split_parent.as_deref(), Some(mounts.as_str()));
+
+        // Regroup: back to one model, same id as before the split.
+        conn.execute("DELETE FROM split_dirs WHERE path=?1", params![mounts]).unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(names(&conn), vec!["Motor", "Mounts"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn single_model_root_stays_one_model() {
+        let root = std::env::temp_dir().join(format!("trove_single_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // Someone mounts ONE model folder: loose files, plus generic bucket subfolders.
+        touch(&root.join("helmet.3mf"), 900);
+        touch(&root.join("visor.stl"), 700);
+        touch(&root.join("STLs/part1.stl"), 500);
+
+        let models = group(&root);
+        assert_eq!(models.len(), 1, "a root with only bucket subfolders is one model");
+        assert_eq!(models[0].dir, root);
+        assert_eq!(models[0].files.len(), 3);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn print_status_persists_across_rescan() {
+        let root = std::env::temp_dir().join(format!("trove_ps_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        touch(&root.join("Studio Voxel/Low Poly Fox/fox.stl"), 2048);
+        touch(&root.join("Studio Voxel/Dice Set/d20.stl"), 1024);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        assert!(ds.models.iter().all(|m| m.print_status.is_empty()), "no status by default");
+        let fox_id = ds.models.iter().find(|m| m.name == "Low Poly Fox").unwrap().id.clone();
+
+        write_print_status(&conn, &fox_id, "queued").unwrap();
+        write_print_status(&conn, &fox_id, "printed").unwrap(); // overwrite, not a second row
+        assert!(write_print_status(&conn, &fox_id, "bogus").is_err(), "unknown status is refused");
+
+        // A rescan deletes and re-inserts the model rows; the status must survive.
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        let status = |name: &str| ds.models.iter().find(|m| m.name == name).unwrap().print_status.clone();
+        assert_eq!(status("Low Poly Fox"), "printed");
+        assert_eq!(status("Dice Set"), "");
+        // The hydrated detail record agrees with the slim grid record.
+        assert_eq!(build_model_full(&conn, &fox_id).unwrap().unwrap().print_status, "printed");
+
+        write_print_status(&conn, &fox_id, "").unwrap();
+        assert_eq!(print_status_of(&conn, &fox_id), "", "empty status clears the row");
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM print_status", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn one_part_per_stem_across_formats() {
+        let root = std::env::temp_dir().join(format!("trove_fmt_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // "arm" exists in three formats, "base" in one; a same-named file in a
+        // SUBFOLDER is a different part.
+        touch(&root.join("Maker/Stand/arm.step"), 900);
+        touch(&root.join("Maker/Stand/arm.stl"), 700);
+        touch(&root.join("Maker/Stand/Arm.3mf"), 800);
+        touch(&root.join("Maker/Stand/base.stl"), 600);
+        touch(&root.join("Maker/Stand/v2/arm.stl"), 650);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+
+        let ds = build_dataset(&conn).unwrap();
+        let slim = ds.models.iter().find(|m| m.name == "Stand").unwrap();
+        assert_eq!(slim.parts_count, 3, "arm (3 formats), base, v2/arm");
+        assert_eq!(slim.file_count, 5);
+
+        let full = build_model_full(&conn, &slim.id).unwrap().unwrap();
+        assert_eq!(full.parts.len(), 3);
+        assert_eq!(full.parts_count, slim.parts_count, "grid badge agrees with the detail view");
+        let arm = full.parts.iter().find(|p| p.files.len() == 3).expect("the three-format part");
+        // Viewer-friendly order within the part: mesh first, CAD last.
+        let order: Vec<&str> = arm.files.iter().map(|f| f.ftype.as_str()).collect();
+        assert_eq!(order, vec!["stl", "3mf", "step"]);
+        assert_eq!(full.files.len(), 5, "the flat file list still has every file");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // A minimal multi-plate slicer project: config + previews, like Bambu Studio writes.
+    fn write_plate_project(p: &Path) {
+        use std::io::Write;
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let mut zip = zip::ZipWriter::new(fs::File::create(p).unwrap());
+        let opt = zip::write::SimpleFileOptions::default();
+        let config = r#"<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <object id="2"><metadata key="name" value="not a plate"/></object>
+  <plate>
+    <metadata key="plater_id" value="1"/>
+    <metadata key="plater_name" value="01_hull &amp; keel"/>
+    <metadata key="thumbnail_file" value="Metadata/plate_1.png"/>
+    <model_instance><metadata key="object_id" value="2"/></model_instance>
+  </plate>
+  <plate>
+    <metadata key="plater_id" value="2"/>
+    <metadata key="plater_name" value=""/>
+    <model_instance><metadata key="plater_name" value="wrong scope"/></model_instance>
+  </plate>
+</config>"#;
+        zip.start_file("Metadata/model_settings.config", opt).unwrap();
+        zip.write_all(config.as_bytes()).unwrap();
+        for (name, bytes) in [
+            ("Metadata/plate_1.png", &b"BIG1"[..]),
+            ("Metadata/plate_1_small.png", &b"small1"[..]),
+            ("Metadata/plate_2.png", &b"BIG2"[..]),
+            ("Metadata/plate_no_light_1.png", &b"x"[..]),
+            ("Metadata/top_1.png", &b"x"[..]),
+            ("Metadata/pick_1.png", &b"x"[..]),
+        ] {
+            zip.start_file(name, opt).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn project_plates_are_read_cached_and_ticked_off() {
+        let root = std::env::temp_dir().join(format!("trove_plates_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let project = root.join("Boat/boat.3mf");
+        write_plate_project(&project);
+
+        // Names from the config (entity-decoded, plate scope only); the small preview
+        // wins where there is one; the non-preview PNG variants add no plates.
+        let raw = read_3mf_plates(&project);
+        assert_eq!(raw.len(), 2);
+        assert_eq!((raw[0].0, raw[0].1.as_str(), raw[0].2.as_deref()), (1, "01_hull & keel", Some(&b"small1"[..])));
+        assert_eq!((raw[1].0, raw[1].1.as_str(), raw[1].2.as_deref()), (2, "", Some(&b"BIG2"[..])));
+
+        // Cached: previews land in the cache dir, and a second call doesn't need the file.
+        let cache = root.join("cache");
+        let first = cached_plates(&project, &cache);
+        assert_eq!(first.len(), 2);
+        assert!(first.iter().all(|p| p.thumb.as_ref().is_some_and(|t| Path::new(t).is_file()) && !p.printed));
+        let moved = root.join("Boat/renamed.3mf");
+        let meta_before = fs::metadata(&project).unwrap().len();
+        assert!(meta_before > 0);
+        assert_eq!(cached_plates(&project, &cache), first, "second read is served from the cache");
+        // A file that isn't a slicer project (or isn't there) has no plates.
+        touch(&root.join("Boat/plain.3mf"), 64);
+        assert!(cached_plates(&root.join("Boat/plain.3mf"), &cache).is_empty());
+        assert!(cached_plates(&moved, &cache).is_empty());
+
+        // Ticking plates off persists per (file, plate) and can be undone.
+        let conn = crate::db::open(&root.join("test.db")).unwrap();
+        let path = project.to_string_lossy().to_string();
+        write_plate_printed(&conn, &path, 2, true).unwrap();
+        write_plate_printed(&conn, &path, 2, true).unwrap(); // idempotent
+        assert_eq!(printed_plates(&conn, &path), HashSet::from([2]));
+        assert!(printed_plates(&conn, "/elsewhere/boat.3mf").is_empty());
+        write_plate_printed(&conn, &path, 2, false).unwrap();
+        assert!(printed_plates(&conn, &path).is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plate_preview_names() {
+        assert_eq!(plate_png_index("Metadata/plate_12.png"), Some(12));
+        assert_eq!(plate_png_index("metadata/Plate_3.PNG"), Some(3));
+        for not_a_plate in ["Metadata/plate_1_small.png", "Metadata/plate_no_light_1.png", "Metadata/top_1.png", "Metadata/plate_x.png", "plate_1.jpg"] {
+            assert_eq!(plate_png_index(not_a_plate), None, "{not_a_plate}");
+        }
+    }
+
+    #[test]
+    fn version_markers_are_recognised() {
+        let v = |s: &str| { let (base, key, label) = name_version(s); (base, key.is_some(), label) };
+        assert_eq!(v("stand_v4"), ("stand".into(), true, "v4".into()));
+        assert_eq!(v("Motor-V11h"), ("Motor".into(), true, "v11h".into()));
+        assert_eq!(v("Watch Stand v2"), ("Watch Stand".into(), true, "v2".into()));
+        // Dotted versions, "+" as a separator, and a marker right after non-ASCII text.
+        assert_eq!(v("Filament+Swatch+System+v6.1"), ("Filament+Swatch+System".into(), true, "v6.1".into()));
+        assert_eq!(v("耗材样本卡v3"), ("耗材样本卡".into(), true, "v3".into()));
+        // Copy markers, as a browser or file manager adds them — alone or after a version.
+        assert_eq!(v("clip (2)"), ("clip".into(), true, "(2)".into()));
+        assert_eq!(v("Filament+Swatch+System+v6.1(2)"), ("Filament+Swatch+System".into(), true, "v6.1 (2)".into()));
+        assert_eq!(v("耗材样本卡v3_(1)"), ("耗材样本卡".into(), true, "v3 (1)".into()));
+        assert_eq!(v("stand_v4 (2)"), ("stand".into(), true, "v4 (2)".into()));
+        // Not versions: glued to a word, no base, no number, or too much after the number.
+        for s in ["motorv8", "v2", "_v2", "valve", "stand_v", "stand_v2final", "stand_vase", "plate_12", "stand_v6.", "(2)", "f(x)"] {
+            assert_eq!(v(s), (s.to_string(), false, "original".into()), "{s}");
+        }
+        // Ordering: original < copy of original < v2 < v4 < copy of v4 < v6.1 < v10.
+        let key = |s: &str| name_version(s).1;
+        let order = ["a", "a (2)", "a_v2", "a_v4", "a_v4 (2)", "a_v6.1", "a_v10"];
+        for w in order.windows(2) {
+            assert!(key(w[0]) < key(w[1]), "{} < {}", w[0], w[1]);
+        }
+        assert_eq!(version_base("stand_v4"), "stand");
+        assert_eq!(version_base("stand"), "stand");
+    }
+
+    #[test]
+    fn versions_fold_into_one_part_newest_first() {
+        let root = std::env::temp_dir().join(format!("trove_ver_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // A stand in four versions (the first without a marker), v4 in two formats;
+        // a clip that merely has a "v" name; a lone versioned file.
+        touch(&root.join("Maker/Stand/stand.3mf"), 500);
+        touch(&root.join("Maker/Stand/stand_v2.3mf"), 500);
+        touch(&root.join("Maker/Stand/stand_v10.3mf"), 500);
+        touch(&root.join("Maker/Stand/stand_v4.3mf"), 500);
+        touch(&root.join("Maker/Stand/stand_v10.step"), 500);
+        touch(&root.join("Maker/Stand/clip.stl"), 500);
+        touch(&root.join("Maker/Stand/base_v3.stl"), 500);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        let slim = ds.models.iter().find(|m| m.name == "Stand").unwrap();
+        assert_eq!(slim.parts_count, 3, "stand (4 versions), clip, base_v3");
+
+        let full = build_model_full(&conn, &slim.id).unwrap().unwrap();
+        assert_eq!(full.parts.len(), 3);
+        let stand = full.parts.iter().find(|p| p.name == "stand").expect("named after the shared base");
+        let labels: Vec<&str> = stand.versions.iter().map(|v| v.label.as_str()).collect();
+        assert_eq!(labels, vec!["v10", "v4", "v2", "original"], "numeric order, newest first");
+        // The part's own files are the newest version's, viewer-friendly format first.
+        let newest: Vec<&str> = stand.files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(newest, vec!["stand_v10.3mf", "stand_v10.step"]);
+        // One version only → an ordinary part that keeps its full name.
+        let base = full.parts.iter().find(|p| p.name == "base_v3").expect("lone version keeps its name");
+        assert!(base.versions.is_empty());
+        assert!(full.parts.iter().find(|p| p.name == "clip").unwrap().versions.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn loose_file_next_to_its_folder_belongs_there() {
+        let root = std::env::temp_dir().join(format!("trove_home_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // A project folder, and loose files in the shelf root that are plainly its.
+        touch(&root.join("Watch_Stand/Watch_Stand_v3.3mf"), 500);
+        touch(&root.join("Watch_Stand_v4.3mf"), 600); // version of the folder's name → "(file)" twin
+        touch(&root.join("Cable Clip/clip.stl"), 500);
+        touch(&root.join("cable-clip.3mf"), 500); // same name, different separators/case
+        touch(&root.join("Hook.stl"), 500); // no folder of that name
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        // (name, is it the loose-file model?) → where it belongs.
+        let home = |name: &str, file: bool| {
+            ds.models.iter().find(|m| m.name == name && m.file_model == file)
+                .unwrap_or_else(|| panic!("{name}/{file}: {:?}", ds.models.iter().map(|m| (&m.name, m.file_model)).collect::<Vec<_>>()))
+                .belongs_to.clone()
+        };
+        let stand = root.join("Watch_Stand").to_string_lossy().to_string();
+        let clip = root.join("Cable Clip").to_string_lossy().to_string();
+
+        // A version of the folder's name had to step aside as "(file)" — it belongs there.
+        assert_eq!(home("Watch Stand (file)", true), Some(stand));
+        // Same name with other separators/case is recognised too.
+        assert_eq!(home("Cable Clip", true), Some(clip));
+        // Folder models and unrelated loose files belong nowhere else.
+        assert_eq!(home("Cable Clip", false), None);
+        assert_eq!(home("Watch Stand", false), None);
+        assert_eq!(home("Hook", true), None);
+        // The hydrated record agrees with the slim one.
+        let id = ds.models.iter().find(|m| m.name == "Cable Clip" && m.file_model).unwrap().id.clone();
+        assert!(build_model_full(&conn, &id).unwrap().unwrap().belongs_to.is_some());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn copies_are_flagged_and_models_can_be_renamed() {
+        let root = std::env::temp_dir().join(format!("trove_dup_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // A shelf root: a download and its "(2)" copy, plus an unrelated folder model.
+        touch(&root.join("Swatch+System+v6.1.3mf"), 900);
+        touch(&root.join("Swatch+System+v6.1(2).3mf"), 800);
+        touch(&root.join("Motor/housing.stl"), 1500);
+        touch(&root.join("Motor/housing_v2.stl"), 1500);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        assert_eq!(ds.models.len(), 2, "{:?}", ds.models.iter().map(|m| &m.name).collect::<Vec<_>>());
+        let swatch = ds.models.iter().find(|m| m.file_model).unwrap();
+        assert_eq!(swatch.file_count, 2, "the copy joins the model it is a copy of");
+        assert!(swatch.duplicates);
+        let motor = ds.models.iter().find(|m| m.name == "Motor").unwrap();
+        assert!(!motor.duplicates, "versions are not duplicates");
+
+        // Detail: one part, the copy listed as the newest "version".
+        let full = build_model_full(&conn, &swatch.id).unwrap().unwrap();
+        assert!(full.duplicates);
+        let labels: Vec<&str> = full.parts[0].versions.iter().map(|v| v.label.as_str()).collect();
+        assert_eq!(labels, vec!["v6.1 (2)", "v6.1"]);
+
+        // Rename: display name only, survives a rescan, searchable, and reversible.
+        let id = swatch.id.clone();
+        let original = swatch.name.clone();
+        set_name_override(&conn, "model", &id, "Filament Swatches").unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        rebuild_fts(&conn).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        assert_eq!(ds.models.iter().find(|m| m.id == id).unwrap().name, "Filament Swatches");
+        assert_eq!(build_model_full(&conn, &id).unwrap().unwrap().name, "Filament Swatches");
+        assert!(search_model_ids_ranked(&conn, "swatches").unwrap().contains(&id), "found by the new name");
+        conn.execute("DELETE FROM name_overrides WHERE kind='model' AND id=?1", params![id]).unwrap();
+        assert_eq!(build_dataset(&conn).unwrap().models.iter().find(|m| m.id == id).unwrap().name, original);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_newest_version_is_the_models_face() {
+        assert!(newer_file("/a/stand_v4.3mf", "/a/stand.3mf"));
+        assert!(newer_file("/a/stand_v4 (2).3mf", "/a/stand_v4.3mf"));
+        assert!(newer_file("/a/stand_v10.3mf", "/a/stand_v4.3mf"));
+        assert!(!newer_file("/a/stand.3mf", "/a/stand_v2.3mf"));
+        assert!(!newer_file("/a/x.3mf", "/a/y.3mf"), "unversioned files don't outrank each other");
+    }
+
+    #[test]
+    fn a_cut_short_project_is_damaged() {
+        let root = std::env::temp_dir().join(format!("trove_dmg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let good = root.join("Boat/boat.3mf");
+        write_plate_project(&good);
+        // The same project with its tail cut off: file headers, no central directory.
+        let bytes = fs::read(&good).unwrap();
+        let cut = root.join("Boat/boat_v2.3mf");
+        fs::write(&cut, &bytes[..bytes.len() / 2]).unwrap();
+
+        assert_eq!(archive_is_readable(&good), Some(true));
+        assert_eq!(archive_is_readable(&cut), Some(false));
+        assert_eq!(archive_is_readable(&root.join("Boat/missing.3mf")), None, "gone is not the same as damaged");
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let cut_path = cut.to_string_lossy().to_string();
+        note_damaged(&conn, &cut_path, true);
+        note_damaged(&conn, &cut_path, true); // idempotent
+
+        // Slim and hydrated records both carry it; the intact file is not marked.
+        let ds = build_dataset(&conn).unwrap();
+        let m = ds.models.iter().find(|m| m.name == "Boat").unwrap();
+        assert!(m.damaged);
+        let full = build_model_full(&conn, &m.id).unwrap().unwrap();
+        assert!(full.damaged);
+        let flagged: Vec<&str> = full.files.iter().filter(|f| f.damaged).map(|f| f.name.as_str()).collect();
+        assert_eq!(flagged, vec!["boat_v2.3mf"]);
+
+        // Reads fine again (or is gone) → no longer damaged.
+        note_damaged(&conn, &cut_path, false);
+        assert!(!build_dataset(&conn).unwrap().models.iter().any(|m| m.damaged));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cad_argv_resolution() {
+        let f = "/models/My Fox/fox v2.step";
+        // No command set: SolidCraft when it's installed, else a clear error.
+        let (argv, name) = cad_argv("", f, true).unwrap();
+        assert_eq!(argv, vec!["solidcraft", f]);
+        assert_eq!(name, "SolidCraft");
+        assert!(cad_argv("  ", f, false).unwrap_err().contains("Settings"));
+        // A custom command wins regardless; the file is one trailing argument.
+        let (argv, name) = cad_argv("freecad --single-instance", f, false).unwrap();
+        assert_eq!(argv, vec!["freecad", "--single-instance", f]);
+        assert_eq!(name, "CAD");
+    }
+
+    #[test]
+    fn slicer_argv_resolution() {
+        let none = SlicerProbe::default();
+        let f = "/models/My Fox/fox v2.3mf";
+        let fp = |id: &str, on_path: bool| SlicerProbe { flatpak: Some(id.to_string()), on_path };
+
+        // Custom: the command is split on whitespace and the file is ONE trailing
+        // argument even with spaces in it (no shell, so nothing to quote or inject).
+        assert_eq!(
+            slicer_argv("custom", "  prusa-slicer   --single-instance ", f, "linux", &none).unwrap(),
+            vec!["prusa-slicer", "--single-instance", f]
+        );
+        assert!(slicer_argv("custom", "   ", f, "linux", &none).unwrap_err().contains("Settings"));
+
+        // Bambu Studio is the default for an unset/unknown setting. Linux: a native
+        // install first, then the Flatpak, else a clear error.
+        assert_eq!(slicer_argv("", "", f, "linux", &fp("com.bambulab.BambuStudio", true)).unwrap(), vec!["bambu-studio", f]);
+        assert_eq!(
+            slicer_argv("bambu", "", f, "linux", &fp("com.bambulab.BambuStudio", false)).unwrap(),
+            vec!["flatpak", "run", "--file-forwarding", "com.bambulab.BambuStudio", "@@", f, "@@"]
+        );
+        assert!(slicer_argv("bambu", "", f, "linux", &none).unwrap_err().contains("Bambu Studio"));
+        // A leftover custom command is ignored unless "custom" is selected.
+        assert_eq!(
+            slicer_argv("bambu", "prusa-slicer", f, "linux", &SlicerProbe { flatpak: None, on_path: true }).unwrap(),
+            vec!["bambu-studio", f]
+        );
+
+        // OrcaSlicer: same resolution, its own names — and whichever Flatpak id is installed.
+        assert_eq!(
+            slicer_argv("orca", "", f, "linux", &SlicerProbe { flatpak: None, on_path: true }).unwrap(),
+            vec!["orca-slicer", f]
+        );
+        assert_eq!(
+            slicer_argv("orca", "", f, "linux", &fp("com.orcaslicer.OrcaSlicer", false)).unwrap()[3],
+            "com.orcaslicer.OrcaSlicer"
+        );
+        assert!(slicer_argv("orca", "", f, "linux", &none).unwrap_err().contains("OrcaSlicer"));
+
+        // macOS / Windows don't depend on the probe.
+        assert_eq!(slicer_argv("bambu", "", f, "macos", &none).unwrap(), vec!["open", "-a", "BambuStudio", f]);
+        assert_eq!(slicer_argv("orca", "", f, "macos", &none).unwrap(), vec!["open", "-a", "OrcaSlicer", f]);
+        assert!(slicer_argv("orca", "", f, "windows", &none).unwrap()[0].ends_with("orca-slicer.exe"));
     }
 
     #[test]

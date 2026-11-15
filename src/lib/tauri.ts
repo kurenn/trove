@@ -1,7 +1,7 @@
 /* tauri.ts — thin bridge to the Rust backend. In a plain browser (dev/preview
    without Tauri) isTauri is false and callers fall back to mock data. */
 
-import type { Dataset, Library, ScanOptions, QuickResults, Model } from "../data/types";
+import type { Dataset, Library, ScanOptions, QuickResults, Model, PrintStatus, Plate } from "../data/types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -22,6 +22,8 @@ export const api = {
   getModel: (id: string) => invoke<Model | null>("get_model", { id }),
   /** Rename a creator (persisted; survives rescans). Returns the rebuilt dataset. */
   renameCreator: (id: string, name: string) => invoke<Dataset>("rename_creator", { id, name }),
+  /** Give a model a display name (index only; "" restores the derived name). */
+  renameModel: (id: string, name: string) => invoke<Dataset>("rename_model", { id, name }),
   /** Create a user collection. Returns [newId, dataset]. */
   createCollection: (name: string) => invoke<[string, Dataset]>("create_collection", { name }),
   renameCollection: (id: string, name: string) => invoke<Dataset>("rename_collection", { id, name }),
@@ -30,6 +32,26 @@ export const api = {
   removeFromCollection: (collectionId: string, modelId: string) =>
     invoke<Dataset>("remove_from_collection", { collectionId, modelId }),
   deleteCollection: (id: string) => invoke<Dataset>("delete_collection", { id }),
+  /** Set a model's print status ("" clears it). Returns the rebuilt dataset. */
+  setPrintStatus: (modelId: string, status: PrintStatus) =>
+    invoke<Dataset>("set_print_status", { modelId, status }),
+  /** Hand an indexed model file to the slicer (Bambu Studio unless a custom
+      command is set in Settings). Rejects with a readable message on failure. */
+  openInSlicer: (path: string) => invoke<void>("open_in_slicer", { path }),
+  /** Index a folder model as separate models (its loose files + subfolders).
+      Changes the index only; starts a rescan and returns the libraries. */
+  splitFolder: (modelId: string) => invoke<Library[]>("split_folder", { modelId }),
+  /** Undo splitFolder for a folder path: it becomes one model again. */
+  unsplitFolder: (path: string) => invoke<Library[]>("unsplit_folder", { path }),
+  /** Name of the CAD program "Edit in …" starts, or null when there is none. */
+  cadName: () => invoke<string | null>("cad_name"),
+  /** Hand an indexed model file to the CAD program for editing. */
+  openInCad: (path: string) => invoke<void>("open_in_cad", { path }),
+  /** Build plates of an indexed slicer project (.3mf) with previews + printed
+      flags; [] when the file isn't a slicer project. Thumbs are raw cache paths. */
+  getPlates: (path: string) => invoke<Plate[]>("get_plates", { path }),
+  setPlatePrinted: (path: string, plate: number, printed: boolean) =>
+    invoke<void>("set_plate_printed", { path, plate, printed }),
   listLibraries: () => invoke<Library[]>("list_libraries"),
   addLibrary: (path: string, name: string | null, options: ScanOptions) =>
     invoke<Library[]>("add_library", { path, name, options }),

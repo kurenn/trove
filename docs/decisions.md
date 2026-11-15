@@ -22,6 +22,201 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
+## 2026-11-15 — Damaged projects are flagged
+
+**Decision:** the embedded-thumbnail pass — the one place that opens `.3mf` files anyway
+— records a project that does not open as an archive in `damaged_files` and skips it, so
+an older intact version can still supply the picture. The model gets a "damaged" badge
+and its page names the file and why. `SCAN_VERSION` 7 → 8 so existing libraries get
+checked.
+**Because:** a copy that was cut short (an SD-card backup, an interrupted download) looks
+like any other project until it fails to preview with no reason given; the user then
+has nothing to act on.
+**Rejected:** offering to delete the file — *Read-only, forever*; the page reveals it in
+the file manager instead. Validating every archive on every scan — it opens every
+project file each time; only models still lacking a picture are checked, which is where
+a damaged file shows.
+**Unsure about:** a damaged OLDER version of a model that already has a picture is never
+opened, so never flagged. "Not a readable zip" also flags a `.3mf` that is some other
+format entirely — arguably also "can't be opened", but the wording says "incomplete".
+**Affects:** `generate_image_thumbs`, `archive_is_readable` / `note_damaged`,
+`Model.damaged` / `ModelFile.damaged`, the panel on Detail.
+
+## 2026-11-15 — Copies and dotted versions join the version logic; renames are index-only
+
+**Decision:** (1) `name_version` replaces the first version parser: a trailing `(n)` is a
+copy marker (a second download, a file-manager duplicate), versions may be dotted
+(`v6.1`), `+` counts as a separator, and the marker may follow non-ASCII text directly
+(`耗材样本卡v3`). A copy sorts right after the file it copies, so it folds into the same
+part/model as its newest "version", and a model holding one is flagged `duplicates`.
+(2) The model's thumbnail comes from its NEWEST version's file. (3) A model can be
+renamed: an override in `name_overrides` (kind `model`), applied when the dataset is
+built and included in the search index; an empty name restores the derived one.
+(4) STEP-only models get a thumbnail rendered in the webview (OCCT WASM), one small
+file at a time. `SCAN_VERSION` 6 → 7.
+**Because:** two downloads of one thing showed up as two models; a model named after a
+download's file name can't be fixed without renaming the file; a design that moved on
+kept showing its first version; STEP exports stayed blank tiles.
+**Rejected:** comparing file contents to call something a duplicate — it means hashing
+every file on every scan, and the two "duplicates" that prompted this differ in content
+anyway (re-downloaded, re-saved). Renaming the file on disk — *Read-only*. Rendering
+STEP in Rust — no pure-Rust STEP tessellator worth depending on.
+**Unsure about:** `name (2)` that is NOT a copy but a legitimately numbered thing
+("Plate (2)") is merged as one — the version chips still show both. The STEP render
+parses on the main thread; the 3 MB cap and the pause are guesses at "small enough".
+**Affects:** `name_version` / `is_copy` / `newer_file`, thumbnail passes in
+`generate_image_thumbs`, `rename_model`, `rebuild_fts`, `Model.duplicates`,
+`thumbs.ts` (`needsStepThumb`), the title editor on Detail.
+
+## 2026-11-15 — Linux webview: no per-card backdrop blur
+
+**Decision:** on Linux the root element gets `no-backdrop-blur`, and cards drop
+`backdrop-filter` on the heart button and badges for a more opaque fill; smooth
+scrolling is off there too.
+**Because:** scrolling the grid stuttered on WebKitGTK, which blurs in software — one
+layer per badge per card. This is a likely cause, not a measured one.
+**Rejected:** removing the blur everywhere — it is fine on macOS/Windows webviews.
+**Unsure about:** whether this was the whole problem; a dev build (unminified React,
+unoptimized Rust) is slow in its own right, so judge it in a release build.
+**Affects:** `main.tsx`, `app.css`.
+
+## 2026-11-15 — A loose file next to its same-named folder is pointed out, not moved
+
+**Decision:** a loose-file model with a same-named folder model right next to it
+(`Stand_v4.3mf` beside `Stand/`; names compared on letters and digits only) is flagged —
+a "loose copy" badge on its card, a note on its page with **Open folder**.
+**Because:** slicers save next to wherever a file was opened from, so projects leak
+loose copies into the parent folder; Trove can see that precisely.
+**Rejected:** moving the file into the folder for the user — *Read-only, forever*.
+Merging the loose file into the folder model in the index only — it would hide a mess
+that is still there on disk.
+**Unsure about:** whether a hint without an action is worth the badge.
+**Affects:** `folder_homes` / `belongs_to`, `Model.belongsTo`, the note on Detail, the
+card badge.
+
+## 2026-11-15 — Versions are read from file names; plates are read from the project on demand
+
+**Decision:** (1) a stem ending in a separator + `v<number>[letters]` (`stand_v4`,
+`Motor-V11h`) is a version of its base. Files of one base in one folder are one part
+whose `versions` list is newest first (a file without a marker is "original", the
+oldest); `part.files` is the newest version's. A part with a single version is left
+alone, name included. Loose shelf files group the same way, so `hook_v1.3mf` +
+`hook_v2.3mf` are one model. `SCAN_VERSION` 5 → 6. (2) A multi-plate slicer project
+(`.3mf` with `Metadata/model_settings.config`) lists its plates — number, name, preview
+— on the detail page, each tickable as printed (`plate_status`, keyed by file path +
+plate number). The project is read when its detail page first opens, then served from a
+cache keyed by (path, size, mtime).
+**Because:** (1) iterating on a design leaves `_v2`, `_v3`… next to each other; shown as
+separate parts they bury the current one. (2) for a 25-plate project a single
+model-level "printed" says nothing about where the print run stands.
+**Rejected:** (1) Trove keeping its own version history (snapshots, notes) — it would
+have to copy files, which breaks *Read-only, forever*. Fuzzy markers (`final`, `neu`,
+dates) — no order can be derived from them. Requiring no separator (`motorv8`) — too
+many false positives. (2) Extracting plates during the scan — it would open every
+project file on every scan, including on network shares, for data most models never
+show. Parsing with an XML crate — the config is flat key/value metadata; a 20-line
+scanner covers it without a dependency.
+**Unsure about:** `part_v2` vs `part_V2` vs `part_v02` collapse to one version label
+only by number, so `v2` and `v02` would be two entries. Plate ticks are keyed by path:
+renaming the project (e.g. to a new version!) starts from zero — arguably right, since
+a new version needs reprinting, but it is a side effect, not a decision. Sliced-plate
+data (time, filament) is in `slice_info.config` and is not read yet.
+**Affects:** `version_split` / `apply_versions` / `part_key`, `group_models` (shelf
+grouping), `read_3mf_plates` / `cached_plates` / `get_plates` / `set_plate_printed`,
+`Part.versions`, the Plates panel and version chips on Detail.
+
+## 2026-11-15 — A part is a (folder, stem), not a file; "Edit in CAD" mirrors the slicer handoff
+
+**Decision:** (1) files in the same folder with the same stem (`arm.stl`, `arm.step`,
+`arm.3mf`) are ONE part with several formats; the grid's part count uses the same key.
+The slicer gets the part's 3MF (else a mesh), CAD gets its native design or STEP (else a
+mesh). The detail header lists the model's formats. (2) `open_in_cad` starts the
+`cad_command` setting with the file as last argument, defaulting to SolidCraft when it is
+on PATH; with neither, `cad_name` returns None and the button is hidden.
+**Because:** people export the same part in several formats, and listing them as three
+parts inflated counts and made "which file do I open?" the user's problem.
+**Rejected:** matching stems across subfolders — `v2/arm.stl` is a different thing from
+`arm.stl`. Fuzzy stem matching (`arm_v2`, `arm-final`) — that is versioning, a separate
+feature. A CAD picker like the slicer's — there is no small set of CAD programs worth
+hard-coding; a command field covers all of them.
+**Unsure about:** same-stem files that are genuinely different objects (rare, but
+`body.stl` + `body.3mf` where the 3MF is a whole plate) now merge into one part.
+**Affects:** `build_model_full` (`part_key`, `format_rank`), `build_dataset` (part count),
+`open_in_cad` / `cad_name`, `slicerFile` / `cadFile` / `formatsOf`, Settings → Libraries → CAD.
+
+## 2026-11-15 — Below the root, splitting a folder into models is the user's call
+
+**Decision:** a folder model's detail page offers **Split into separate models**. The
+folder's path goes into a `split_dirs` table and every scan treats it as a shelf, exactly
+like a shelf root: loose model files become one model each, subfolders group on their
+own. Models that came out of a split carry `splitParent` and offer **Regroup**, which
+removes the row. Both only change the index and trigger a rescan.
+**Because:** the root-shelf entry below left category folders ("Mounts/" with 12 loose
+files and one project folder) as a single model, and could not fix it by rule: the same
+shape is one model elsewhere ("Motor/" with 20 loose files and `Parts/`).
+**Rejected:** a heuristic on file counts or name similarity — wrong often enough in both
+directions to be worse than asking. A per-library "split everything" switch — would
+shred real multi-part models. Storing the choice as a marker file in the folder — breaks
+*Read-only, forever*.
+**Unsure about:** paths are absolute, so moving or remounting a library orphans its
+`split_dirs` rows (harmless, but the split is lost). Whether "is this a file model" should
+be a stored column instead of derived from `id != hash(folder)`.
+**Affects:** `db.rs` (`split_dirs`), `group_models` (takes the split set), `shelf_facts`,
+`split_folder` / `unsplit_folder`, `Model.fileModel` / `Model.splitParent`, Detail.
+
+## 2026-11-15 — A library root with loose files beside model folders is a shelf, not a model
+
+**Decision:** when the library root directly holds model files AND has at least one
+non-bucket subfolder with media, the root is not a model root. Its subfolders group as
+usual, and each loose model file in the root becomes its own model (with same-stem
+siblings such as `fox.png`), identified by a virtual directory `<root>/<stem>`. Nothing
+is created on disk; the stored `folder` is the real root. `SCAN_VERSION` 4 → 5.
+**Because:** "shallowest directory holding a model file" made such a root swallow the
+whole library — a real 2,700-file collection indexed as one model named after the
+mount folder, which makes the app useless for anyone who keeps a few stray files at
+the top of their prints folder.
+**Rejected:** applying the same split at every level — below the root it is ambiguous:
+"Mounts/ + 12 loose files + one project folder" is a category, but "Motor/ + 20 loose
+files + Parts/" is one model, and no filename heuristic separates them. Treating the
+root as a shelf unconditionally — it would break mounting a single model folder
+("Helmet/ + STLs/"), so a root whose only media subfolders are generic buckets stays
+one model.
+**Unsure about:** category folders one level down still collapse into one model each.
+The likely fix is a per-model "split into separate models" action stored in the DB,
+not more heuristics. The virtual directory means `Copy path` on a file model yields
+the root, not the file.
+**Affects:** `group_models`, `compute_record` (`folder`), `SCAN_VERSION` (one reindex
+prompt for existing libraries).
+
+## 2026-11-15 — "Open in slicer" spawns the slicer directly; print status lives in its own table
+
+**Decision:** two additions. (1) A model's print status (`queued` / `printed`, no row =
+none) is stored in a `print_status` table keyed by model id — not a column on `models`.
+(2) `open_in_slicer` starts the slicer as a child process with the file as its last
+argument. The `slicer_app` setting picks it: Bambu Studio (default), OrcaSlicer, or
+`custom`, which runs the `slicer_command` setting. A known slicer is resolved per
+platform — on Linux a native binary on PATH first, then its Flatpak; `open -a` on macOS;
+the default install path on Windows. The command only accepts a path that is in the
+`files` table.
+**Because:** (1) a rescan deletes and re-inserts `models` rows, so a column would be wiped
+by every rescan; a separate non-cascading table survives it the same way
+`collection_members` does. (2) "open with the OS default app" (the opener plugin) hands a
+`.3mf`/`.stl` to whatever the desktop associates with it — often an archive manager or a
+viewer, not the slicer — and can't target a Flatpak slicer at all.
+**Rejected:** the `bambustudio://open?file=` URL scheme — it expects a URL to download,
+so a local file would need a local HTTP server. The opener plugin with a named app — its
+scope model is per-path, not per-program, and it doesn't cover Flatpak. Running the
+custom command through a shell — would make spaces and quotes in file names an injection
+surface; the command is split on whitespace and the path is one argv entry instead, which
+means a program path containing spaces can't be expressed (acceptable: wrap it in a script).
+**Unsure about:** the Windows default paths and the macOS app names are untested (no such
+machine at hand), as is OrcaSlicer's Flatpak id — two candidates are probed. Whether status should be per file/part rather than per model. Whether
+favorites — still in-memory only — should move into the same kind of table.
+**Affects:** `db.rs` (schema), `index.rs` (`set_print_status`, `open_in_slicer`,
+`slicer_argv`, `slicer_app`), `Model.printStatus`, the Print status facet, Settings → Libraries → Slicer.
+This does not weaken *Read-only, forever*: Trove still never writes to a model file; it
+starts another program that the user asked for.
+
 ## 2026-09-17 — After an update that changes indexing, prompt a reindex; never auto-rescan
 
 **Decision:** each library reports `stale` when its stored `scan_version:{id}` marker

@@ -11,6 +11,17 @@ pub struct ModelFile {
     pub size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The file is an unreadable archive (e.g. a .3mf whose copy was cut short).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub damaged: bool,
+}
+
+/// One version of a part, recognised from its file name (`stand_v4.3mf` → "v4").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartVersion {
+    /// "v4", "v11h", or "original" for the file without a version marker.
+    pub label: String,
+    pub files: Vec<ModelFile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,7 +30,25 @@ pub struct Part {
     pub name: String,
     pub geometry: String,
     pub color: String,
+    /// The part's files — of its NEWEST version when it has several.
     pub files: Vec<ModelFile>,
+    /// All versions, newest first. Empty unless the part exists in at least two.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub versions: Vec<PartVersion>,
+}
+
+/// One build plate of a slicer project (.3mf).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Plate {
+    /// 1-based plate number, as the slicer shows it.
+    pub index: u32,
+    /// The plate's name from the project, or "" when it has none.
+    pub name: String,
+    /// Cached plate preview (raw cache path; the frontend resolves it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumb: Option<String>,
+    /// Ticked off as printed by the user.
+    pub printed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +124,28 @@ pub struct Model {
     /// the cached thumbnail instead of a procedural mock shape without the parts array.
     #[serde(default)]
     pub real: bool,
+    /// User-set print status: "" (none), "queued" (to print) or "printed".
+    #[serde(rename = "printStatus", default)]
+    pub print_status: String,
+    /// True when the model is a single loose file (plus same-stem siblings) on a
+    /// shelf — a library root or a split folder — rather than a folder of its own.
+    #[serde(rename = "fileModel", default)]
+    pub file_model: bool,
+    /// The split folder this model came out of, if its parent folder was split by
+    /// the user (lets the UI offer to regroup it).
+    #[serde(rename = "splitParent", default, skip_serializing_if = "Option::is_none")]
+    pub split_parent: Option<String>,
+    /// For a loose-file model: the folder model right next to it with the same
+    /// name — where this file most likely belongs (the UI points it out).
+    #[serde(rename = "belongsTo", default, skip_serializing_if = "Option::is_none")]
+    pub belongs_to: Option<String>,
+    /// True when the model holds a copy of one of its own files — the same name
+    /// with a "(2)"-style marker, as a second download or a duplicate gets.
+    #[serde(default)]
+    pub duplicates: bool,
+    /// True when one of the model's files is damaged (see `ModelFile::damaged`).
+    #[serde(default)]
+    pub damaged: bool,
     /** Cached thumbnail (asset path) once rendered. */
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumb: Option<String>,

@@ -3,7 +3,7 @@
    the current snapshot via the store, so they stay valid as data swaps. */
 
 import { useApp } from "../lib/store";
-import type { Dataset, Model, Filters, GeometryKey, Library } from "./types";
+import type { Dataset, Model, ModelFile, Filters, GeometryKey, Library, PrintStatus } from "./types";
 
 /** Reactive hook — re-renders when the dataset changes (mock → Rust index). */
 export const useDataset = (): Dataset => useApp((s) => s.data);
@@ -15,12 +15,28 @@ export const creatorById = (id: string) => data().CREATORS.find((c) => c.id === 
 export const collectionById = (id: string) => data().COLLECTIONS.find((c) => c.id === id);
 export const modelById = (id: string) => data().MODELS.find((m) => m.id === id);
 
+/** Tags that say what FORMAT a model is in, not what it IS. Nearly every model
+    carries one, so counting them as similarity made "similar" mean "also a 3MF". */
+const FORMAT_TAGS = new Set(["3mf", "stl", "step", "stp", "obj", "gcode", "blend"]);
+/** Words of a model name worth matching on: 4+ characters, not pure numbers. */
+const nameWords = (name: string) =>
+  new Set(name.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4 && !/^\d+$/.test(w)));
+
+/** Up to four models that have something real in common with `model`: a word in
+    the name (strongest), a descriptive tag, the same collection. Models with
+    nothing in common are not padded in — an empty list is a truthful answer. */
 export function similar(model: Model): Model[] {
+  const words = nameWords(model.name);
+  const tags = model.tags.filter((t) => !FORMAT_TAGS.has(t.toLowerCase()));
   return data().MODELS.filter((m) => m.id !== model.id)
     .map((m) => ({
       m,
-      score: m.tags.filter((t) => model.tags.includes(t)).length + (m.collection === model.collection ? 1 : 0),
+      score:
+        3 * [...nameWords(m.name)].filter((w) => words.has(w)).length +
+        m.tags.filter((t) => tags.includes(t)).length +
+        (m.collection && m.collection === model.collection ? 1 : 0),
     }))
+    .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, 4)
     .map((x) => x.m);
@@ -32,6 +48,79 @@ export function similar(model: Model): Model[] {
 export const isReal = (m: Model) => m.real ?? !!m.parts[0]?.files[0]?.path;
 export const partCount = (m: Model) => m.partsCount ?? m.parts.length;
 export const fileCount = (m: Model) => m.fileCount ?? m.files.length;
+
+/** The statuses a user can set, in display order, with their labels. */
+export const PRINT_STATUSES: { id: Exclude<PrintStatus, "">; label: string }[] = [
+  { id: "queued", label: "To print" },
+  { id: "printed", label: "Printed" },
+];
+export const printStatusOf = (m: Model): PrintStatus => m.printStatus ?? "";
+export const printStatusLabel = (s: PrintStatus) => PRINT_STATUSES.find((x) => x.id === s)?.label ?? "";
+
+/** Whether to offer "Split into separate models": a real folder model (not a
+    single-file one) with more than one file — otherwise there is nothing to split. */
+export const canSplit = (m: Model) => isReal(m) && !m.fileModel && fileCount(m) > 1;
+/** Last path segment, for naming a folder in the UI ("/a/b/Mounts" → "Mounts"). */
+export const folderName = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
+
+/** Slicers "Open in slicer" can start. Ids mirror `slicer_app` in index.rs;
+    "custom" runs the command from Settings instead of a known app. */
+export const SLICERS = [
+  { id: "bambu", label: "Bambu Studio" },
+  { id: "orca", label: "OrcaSlicer" },
+  { id: "custom", label: "Custom command" },
+] as const;
+export type SlicerId = (typeof SLICERS)[number]["id"];
+/** Normalise a stored setting (unset/unknown → the default, Bambu Studio). */
+export const slicerId = (v: string | null | undefined): SlicerId =>
+  SLICERS.find((s) => s.id === v)?.id ?? "bambu";
+/** Name for the button: the app's name, or just "slicer" for a custom command. */
+export const slicerButtonName = (id: SlicerId) =>
+  id === "custom" ? "slicer" : SLICERS.find((s) => s.id === id)!.label;
+
+/** Best file for a program among `selected` (the formats of the part in view),
+    else among all the model's files. `types` is the program's preference order.
+    Files without a path (mock data, not hydrated yet) can't be handed over. */
+function bestFile(m: Model, types: string[], selected?: ModelFile[]): ModelFile | undefined {
+  const rank = (t: string) => types.indexOf((t || "").toLowerCase());
+  const pick = (files: ModelFile[]) =>
+    files.filter((f) => f.path && rank(f.type) >= 0).sort((a, b) => rank(a.type) - rank(b.type))[0];
+  return pick(selected ?? []) ?? pick(m.files);
+}
+
+/** What "Open in slicer" hands over. A 3MF project carries plates and settings,
+    so it beats a bare mesh of the same part. Undefined = nothing sliceable. */
+export const slicerFile = (m: Model, selected?: ModelFile[]) =>
+  bestFile(m, ["3mf", "stl", "step", "stp", "obj"], selected);
+
+/** What "Edit in CAD" hands over: a native design or exact geometry (STEP)
+    before a mesh, which a CAD program can only treat as a dumb solid. */
+export const cadFile = (m: Model, selected?: ModelFile[]) =>
+  bestFile(m, ["sc", "step", "stp", "3mf", "stl", "obj"], selected);
+
+/** The files of the version of `part` in view: version `index` (0 = newest) when
+    the part has versions, else simply the part's files. An out-of-range index
+    falls back to the newest, so a stale selection never shows nothing. */
+export function versionFiles(part: { files: ModelFile[]; versions?: { files: ModelFile[] }[] }, index: number): ModelFile[] {
+  return part.versions?.[index]?.files ?? part.files;
+}
+
+/** The slicer project whose plates the detail page lists: the 3MF of the part in
+    view, else the model's first 3MF. Undefined when there is none on disk. */
+export function plateProject(m: Model, selected?: ModelFile[]): ModelFile | undefined {
+  const is3mf = (f: ModelFile) => !!f.path && (f.type || "").toLowerCase() === "3mf";
+  return (selected ?? []).find(is3mf) ?? m.files.find(is3mf);
+}
+/** "Plate 3" for an unnamed plate, else its name. */
+export const plateLabel = (p: { index: number; name: string }) => p.name.trim() || `Plate ${p.index}`;
+
+/** The model's formats for display, most "source-like" first: 3MF, STEP, STL… */
+export function formatsOf(m: Model): string[] {
+  const order = ["3mf", "step", "stp", "stl", "obj", "gcode"];
+  const rank = (t: string) => (order.indexOf(t) < 0 ? order.length : order.indexOf(t));
+  const types = (m.fileTypes ?? m.files.map((f) => f.type)).map((t) => t.toLowerCase());
+  return [...new Set(types)].filter((t) => order.includes(t)).sort((a, b) => rank(a) - rank(b));
+}
 
 export function fmtSize(bytes: number): string {
   if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + " MB";
@@ -111,6 +200,7 @@ export function applyFilters(models: Model[], query: string, f: Filters, searchI
     if (f.types.length && !f.types.some((t) => types.includes(t))) return false;
     if (f.licenses.length && !f.licenses.includes(m.license)) return false;
     if (f.supportFree && m.supports) return false;
+    if (f.status.length && !f.status.includes(printStatusOf(m))) return false;
     return true;
   });
   const sorters: Record<Filters["sort"], (a: Model, b: Model) => number> = {

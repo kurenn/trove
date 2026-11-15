@@ -6,6 +6,7 @@ import { useApp } from "../lib/store";
 import { isTauri, api, openUrl } from "../lib/tauri";
 import { ShortcutField } from "../components/ShortcutField";
 import { checkForUpdate } from "../lib/updater";
+import { SLICERS, slicerId, type SlicerId } from "../data/dataset";
 
 type TabId = "profile" | "library" | "appearance" | "advanced";
 
@@ -56,6 +57,41 @@ export function SettingsScreen() {
     }
   };
 
+  // Which slicer "Open in slicer" starts, plus the command line for "custom".
+  // The choice saves on change; the command saves on blur — it's a rarely-edited
+  // text field, not something to persist per keystroke.
+  const [slicer, setSlicer] = useState<SlicerId>("bambu");
+  const [slicerCmd, setSlicerCmd] = useState("");
+  useEffect(() => {
+    if (!isTauri) return;
+    api.getSetting("slicer_app").then((v) => setSlicer(slicerId(v))).catch(() => {});
+    api.getSetting("slicer_command").then((v) => setSlicerCmd(v ?? "")).catch(() => {});
+  }, []);
+  const chooseSlicer = async (id: SlicerId) => {
+    setSlicer(id);
+    const label = SLICERS.find((x) => x.id === id)!.label;
+    if (!isTauri) { toast(`Slicer: ${label}`); return; }
+    try { await api.setSetting("slicer_app", id); toast(`Slicer: ${label}`); }
+    catch (e) { toast(String(e)); }
+  };
+  const saveSlicerCmd = async () => {
+    if (!isTauri) { toast("Slicer command saved"); return; }
+    try { await api.setSetting("slicer_command", slicerCmd.trim()); toast("Slicer command saved"); }
+    catch (e) { toast(String(e)); }
+  };
+
+  // CAD program for "Edit in …" ("" = SolidCraft when installed). Saved on blur.
+  const [cadCmd, setCadCmd] = useState("");
+  useEffect(() => {
+    if (!isTauri) return;
+    api.getSetting("cad_command").then((v) => setCadCmd(v ?? "")).catch(() => {});
+  }, []);
+  const saveCadCmd = async () => {
+    if (!isTauri) { toast("CAD command saved"); return; }
+    try { await api.setSetting("cad_command", cadCmd.trim()); toast("CAD command saved"); }
+    catch (e) { toast(String(e)); }
+  };
+
   const [tab, setTab] = useState<TabId>(
     (import.meta.env.DEV ? (new URLSearchParams(window.location.search).get("settab") as TabId) : null) || "library"
   );
@@ -95,6 +131,44 @@ export function SettingsScreen() {
                 <Row t="Watch folders for changes" d="Automatically index new files as they appear in mounted folders."><Switch k="watch" /></Row>
                 <Row t="Render 3D thumbnails" d="Generate preview images for every model."><Switch k="thumbs" /></Row>
                 <Row t="Smart auto-tagging" d="Infer tags from filenames, folder structure and geometry."><Switch k="tags" /></Row>
+              </div>
+              <div className="panel">
+                <div className="panel-h"><Icon name="printer" size={18} /> Slicer</div>
+                {/* Not a <Row>: Row is redefined on every render, which would remount
+                    this input and drop focus on each keystroke. */}
+                <div className="set-row">
+                  <div>
+                    <div className="rt">Open models in</div>
+                    <div className="rd">The slicer that “Open in …” on a model’s page starts.</div>
+                  </div>
+                  <select className="input btn-sm" style={{ width: "auto", height: 32 }} value={slicer}
+                          onChange={(e) => chooseSlicer(slicerId(e.target.value))}>
+                    {SLICERS.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+                  </select>
+                </div>
+                {slicer === "custom" &&
+                  <div className="set-row">
+                    <div>
+                      <div className="rt">Slicer command</div>
+                      <div className="rd">The program to start; the model file is added as its last argument.</div>
+                    </div>
+                    <input className="input btn-sm" style={{ width: 240, height: 32 }} value={slicerCmd} placeholder="e.g. prusa-slicer"
+                           spellCheck={false} onChange={(e) => setSlicerCmd(e.target.value)} onBlur={saveSlicerCmd}
+                           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+                  </div>
+                }
+              </div>
+              <div className="panel">
+                <div className="panel-h"><Icon name="wand" size={18} /> CAD</div>
+                <div className="set-row">
+                  <div>
+                    <div className="rt">CAD command</div>
+                    <div className="rd">“Edit in …” on a model’s page starts this program with the file as its last argument. Leave empty to use SolidCraft when it is installed.</div>
+                  </div>
+                  <input className="input btn-sm" style={{ width: 240, height: 32 }} value={cadCmd} placeholder="SolidCraft (auto)"
+                         spellCheck={false} onChange={(e) => setCadCmd(e.target.value)} onBlur={saveCadCmd}
+                         onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+                </div>
               </div>
             </div>
           )}
