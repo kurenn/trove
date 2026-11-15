@@ -8,6 +8,9 @@ The section for each version becomes that version's GitHub release notes.
 - **Print status.** Mark a model as *To print* or *Printed* on its detail page. The status shows as a badge on cards and list rows, can be filtered in the sidebar, and survives rescans.
 - **Open in Bambu Studio.** A button on the detail page hands the selected part — or the model's 3MF project — straight to Bambu Studio (Flatpak or native). Another slicer can be set under Settings → Libraries → Slicer.
 
+### Fixed
+- **A prints folder with loose files at the top is no longer one giant model.** If the folder you mount has model files lying directly in it next to your project folders, each loose file is now its own model and the folders are indexed as before. Reindex once to pick this up.
+
 ## [2.2.0]
 ### Added
 - **Models without a photo now get a real 3D preview, generated while indexing.** Previously a model whose folder had no image and no embedded thumbnail showed a blank tile, and only got a preview if you happened to scroll to its card — which meant downloading the whole mesh over the network, two at a time, and never retrying if that failed. On a 4,800-model library on a NAS, that path had produced **zero** previews and left over a thousand models blank. Previews are now rendered natively during indexing, straight from the STL, and cached like every other thumbnail. In testing this filled in 1,036 previously blank models in about 18 minutes.

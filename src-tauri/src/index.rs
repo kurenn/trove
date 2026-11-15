@@ -583,6 +583,14 @@ fn compute_record(root: &Path, dir: &Path, mtime: i64, files: Vec<ScannedFile>) 
     let printable_exts: Vec<String> = printable.iter().map(|f| f.ext.clone()).collect();
     let (tags, supports) = auto_tags(&hay, &printable_exts, printable.len() > 1);
     let preview = pick_preview(&files);
+    // Real model: every file lives under `dir`. Virtual (shelf-root file model):
+    // the files live in `dir`'s parent, and that is the folder to show.
+    let stored_folder = match files.first().map(|f| Path::new(&f.path)) {
+        Some(first) if !first.starts_with(dir) => {
+            first.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| folder.clone())
+        }
+        _ => folder.clone(),
+    };
 
     ModelRecord {
         id: model_id,
@@ -595,7 +603,9 @@ fn compute_record(root: &Path, dir: &Path, mtime: i64, files: Vec<ScannedFile>) 
         color: color_for(&folder),
         supports,
         added,
-        folder,
+        // A shelf-root file model has a virtual dir (see group_models); what the
+        // user can open and copy is the folder its file actually lives in.
+        folder: stored_folder,
         file_count: fcount,
         total_size,
         dir_mtime: mtime,
@@ -735,7 +745,7 @@ const WALK_THREADS: usize = 16;
 /// `GENERIC_SEGMENTS`/`is_generic_segment`; v4 = `GENERIC_SEGMENTS` widened to
 /// cover the support-state/slicer/process buckets common in miniature
 /// releases, e.g. `Presupported`/`Chitubox`/`FDM`).
-const SCAN_VERSION: i64 = 4;
+const SCAN_VERSION: i64 = 5;
 
 /// A message from a walker thread to the DB writer.
 /// (Retained for the `bench_walk` benchmark; the live scan uses `collect_tree`.)
@@ -940,11 +950,30 @@ fn collect_tree(
 fn group_models(root: &Path, dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>) -> Vec<GroupedModel> {
     // A "candidate" directly holds loose media: a model file (printable or .blend)
     // or an image.
-    let candidates: HashSet<PathBuf> = dirs
+    let mut candidates: HashSet<PathBuf> = dirs
         .iter()
         .filter(|(_, (files, _))| files.iter().any(|f| is_model_file(&f.ext) || is_image(&f.ext)))
         .map(|(p, _)| p.clone())
         .collect();
+    // The library root as a SHELF: loose model files sitting next to real model
+    // folders (e.g. a "3D Prints" folder with a few stray .3mf files beside the
+    // project folders). Left as a candidate, the root would be the shallowest one
+    // and swallow the entire library into a single model. So it stops being a
+    // candidate — its subfolders group on their own — and its loose model files
+    // become one model each further down. A root whose only media subfolders are
+    // generic buckets ("STLs", "Supported"…) is still ONE model: that is someone
+    // mounting a single model folder.
+    let root_is_shelf = dirs.get(root).is_some_and(|(files, _)| files.iter().any(|f| is_model_file(&f.ext)))
+        && candidates.iter().any(|p| {
+            p.strip_prefix(root)
+                .ok()
+                .and_then(|rel| rel.components().next())
+                .and_then(|c| c.as_os_str().to_str())
+                .is_some_and(|seg| !is_generic_segment(seg))
+        });
+    if root_is_shelf {
+        candidates.remove(root);
+    }
     // A model root is the SHALLOWEST candidate in its chain — a candidate with no
     // candidate ancestor. So a model with loose images + nested STL subfolders is
     // one model (the top), while a container (no loose media) lets each child be a
@@ -989,6 +1018,27 @@ fn group_models(root: &Path, dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>) 
             e.0.extend(files.iter().map(|f| f.clone()));
             if *mt > e.1 {
                 e.1 = *mt;
+            }
+        }
+    }
+
+    // Shelf root: each loose model file is its own model, together with any
+    // same-stem siblings (fox.3mf + fox.png). The model gets a VIRTUAL directory
+    // `<root>/<stem>` — it only supplies a stable id and the display name; nothing
+    // is created on disk, and compute_record stores the real folder (the root).
+    // If a real folder already owns that path, the file model steps aside.
+    if root_is_shelf {
+        if let Some((files, mt)) = dirs.get(root) {
+            let mut by_stem: BTreeMap<String, Vec<ScannedFile>> = BTreeMap::new();
+            for f in files {
+                by_stem.entry(stem_of(&f.name)).or_default().push(f.clone());
+            }
+            for (stem, group) in by_stem {
+                let mut vdir = root.join(&stem);
+                if dirs.keys().any(|d| d.starts_with(&vdir)) {
+                    vdir = root.join(format!("{stem} (file)"));
+                }
+                acc.insert(vdir, (group, *mt));
             }
         }
     }
@@ -2784,6 +2834,63 @@ mod tests {
         assert_eq!(uc.members.as_ref().unwrap(), &vec![fox_id]);
         // Folder-derived collections carry no explicit membership.
         assert!(ds.collections.iter().filter(|c| c.id != "uc1").all(|c| c.members.is_none()));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shelf_root_splits_loose_files_into_models() {
+        let root = std::env::temp_dir().join(format!("trove_shelf_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // Loose files in the library root, next to real project folders.
+        touch(&root.join("Cable Clip.3mf"), 900);
+        touch(&root.join("Cable Clip.png"), 300); // same stem → joins the model
+        touch(&root.join("Hook.stl"), 700);
+        touch(&root.join("notes.txt"), 10); // no model file with this stem → dropped
+        touch(&root.join("Motor/housing.stl"), 1500);
+        touch(&root.join("Motor/Parts/rotor.stl"), 1500);
+        // A loose file whose stem collides with a real folder keeps both apart.
+        touch(&root.join("Motor.3mf"), 800);
+
+        let models = group(&root);
+        let mut names: Vec<String> = models.iter().map(|g| file_name(&g.dir)).collect();
+        names.sort();
+        assert_eq!(names, vec!["Cable Clip", "Hook", "Motor", "Motor (file)"], "got {names:?}");
+
+        let by = |n: &str| models.iter().find(|g| file_name(&g.dir) == n).unwrap();
+        assert_eq!(by("Cable Clip").files.len(), 2, "same-stem image joins its model");
+        assert_eq!(by("Hook").files.len(), 1);
+        assert_eq!(by("Motor").files.len(), 2, "the folder model keeps its whole subtree");
+        assert_eq!(by("Motor (file)").files.len(), 1);
+
+        // The virtual dir gives distinct, stable ids; the stored folder is the real one.
+        let rec = compute_record(&root, &by("Hook").dir, 0, by("Hook").files.clone());
+        assert_eq!(rec.name, "Hook");
+        assert_eq!(rec.folder, root.to_string_lossy());
+        let motor = compute_record(&root, &by("Motor").dir, 0, by("Motor").files.clone());
+        assert_eq!(motor.folder, root.join("Motor").to_string_lossy());
+        let ids: HashSet<String> = models
+            .iter()
+            .map(|g| compute_record(&root, &g.dir, 0, g.files.clone()).id)
+            .collect();
+        assert_eq!(ids.len(), 4, "every model has its own id");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn single_model_root_stays_one_model() {
+        let root = std::env::temp_dir().join(format!("trove_single_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // Someone mounts ONE model folder: loose files, plus generic bucket subfolders.
+        touch(&root.join("helmet.3mf"), 900);
+        touch(&root.join("visor.stl"), 700);
+        touch(&root.join("STLs/part1.stl"), 500);
+
+        let models = group(&root);
+        assert_eq!(models.len(), 1, "a root with only bucket subfolders is one model");
+        assert_eq!(models[0].dir, root);
+        assert_eq!(models[0].files.len(), 3);
 
         let _ = fs::remove_dir_all(&root);
     }

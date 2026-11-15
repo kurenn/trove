@@ -22,6 +22,30 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
+## 2026-11-15 — A library root with loose files beside model folders is a shelf, not a model
+
+**Decision:** when the library root directly holds model files AND has at least one
+non-bucket subfolder with media, the root is not a model root. Its subfolders group as
+usual, and each loose model file in the root becomes its own model (with same-stem
+siblings such as `fox.png`), identified by a virtual directory `<root>/<stem>`. Nothing
+is created on disk; the stored `folder` is the real root. `SCAN_VERSION` 4 → 5.
+**Because:** "shallowest directory holding a model file" made such a root swallow the
+whole library — a real 2,700-file collection indexed as one model named after the
+mount folder, which makes the app useless for anyone who keeps a few stray files at
+the top of their prints folder.
+**Rejected:** applying the same split at every level — below the root it is ambiguous:
+"Mounts/ + 12 loose files + one project folder" is a category, but "Motor/ + 20 loose
+files + Parts/" is one model, and no filename heuristic separates them. Treating the
+root as a shelf unconditionally — it would break mounting a single model folder
+("Helmet/ + STLs/"), so a root whose only media subfolders are generic buckets stays
+one model.
+**Unsure about:** category folders one level down still collapse into one model each.
+The likely fix is a per-model "split into separate models" action stored in the DB,
+not more heuristics. The virtual directory means `Copy path` on a file model yields
+the root, not the file.
+**Affects:** `group_models`, `compute_record` (`folder`), `SCAN_VERSION` (one reindex
+prompt for existing libraries).
+
 ## 2026-11-15 — "Open in slicer" spawns the slicer directly; print status lives in its own table
 
 **Decision:** two additions. (1) A model's print status (`queued` / `printed`, no row =
