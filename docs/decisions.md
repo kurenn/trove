@@ -22,6 +22,25 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
+## 2026-11-15 — A part is a (folder, stem), not a file; "Edit in CAD" mirrors the slicer handoff
+
+**Decision:** (1) files in the same folder with the same stem (`arm.stl`, `arm.step`,
+`arm.3mf`) are ONE part with several formats; the grid's part count uses the same key.
+The slicer gets the part's 3MF (else a mesh), CAD gets its native design or STEP (else a
+mesh). The detail header lists the model's formats. (2) `open_in_cad` starts the
+`cad_command` setting with the file as last argument, defaulting to SolidCraft when it is
+on PATH; with neither, `cad_name` returns None and the button is hidden.
+**Because:** people export the same part in several formats, and listing them as three
+parts inflated counts and made "which file do I open?" the user's problem.
+**Rejected:** matching stems across subfolders — `v2/arm.stl` is a different thing from
+`arm.stl`. Fuzzy stem matching (`arm_v2`, `arm-final`) — that is versioning, a separate
+feature. A CAD picker like the slicer's — there is no small set of CAD programs worth
+hard-coding; a command field covers all of them.
+**Unsure about:** same-stem files that are genuinely different objects (rare, but
+`body.stl` + `body.3mf` where the 3MF is a whole plate) now merge into one part.
+**Affects:** `build_model_full` (`part_key`, `format_rank`), `build_dataset` (part count),
+`open_in_cad` / `cad_name`, `slicerFile` / `cadFile` / `formatsOf`, Settings → Libraries → CAD.
+
 ## 2026-11-15 — Below the root, splitting a folder into models is the user's call
 
 **Decision:** a folder model's detail page offers **Split into separate models**. The

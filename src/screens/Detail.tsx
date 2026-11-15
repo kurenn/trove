@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Icon, Avatar, Tag } from "../components/Icons";
 import { Thumb, Viewer3D, type ViewerMode } from "../three/Viewer";
 import { MiniCard } from "../components/cards";
-import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, type SlicerId } from "../data/dataset";
+import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, type SlicerId } from "../data/dataset";
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
 import { isTauri, api, revealInManager, copyText } from "../lib/tauri";
@@ -33,6 +33,12 @@ export function DetailScreen({ model }: { model: Model }) {
   useEffect(() => {
     if (!isTauri) return;
     api.getSetting("slicer_app").then((v) => setSlicer(slicerId(v))).catch(() => {});
+  }, []);
+  // The CAD program "Edit in …" starts, or null when there is none (button hidden).
+  const [cadName, setCadName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isTauri) return;
+    api.cadName().then(setCadName).catch(() => {});
   }, []);
 
   // The grid ships slim models; pull the on-demand-hydrated full record (files,
@@ -109,7 +115,15 @@ export function DetailScreen({ model }: { model: Model }) {
   };
   // What the slicer gets: the selected part if it's sliceable, else the model's
   // best sliceable file (a 3MF project before a bare mesh).
-  const toSlice = slicerFile(m, partFile);
+  const toSlice = slicerFile(m, part.files);
+  // CAD gets the part's most editable format: a native design or STEP before a mesh.
+  const toEdit = cadFile(m, part.files);
+  const openInCad = async () => {
+    if (!toEdit?.path) return;
+    try { await api.openInCad(toEdit.path); toast(`Opening ${toEdit.name} in ${cadName}…`); }
+    catch (e) { toast(String(e)); }
+  };
+  const formats = formatsOf(m);
   const slicerName = slicerButtonName(slicer);
   const openInSlicer = async () => {
     if (!toSlice?.path) return;
@@ -228,6 +242,10 @@ export function DetailScreen({ model }: { model: Model }) {
 
         <div>
           <h1 className="page-title" style={{ fontSize: 26 }}>{m.name}</h1>
+          {formats.length > 0 &&
+            <div className="format-row" title="Formats this model is available in">
+              {formats.map((t) => <span key={t} className="format-chip">{t}</span>)}
+            </div>}
           <div className="creator-card" style={{ marginTop: 14, boxShadow: "none", cursor: "pointer" }} onClick={() => nav({ name: "creator", id: creator.id })}>
             <Avatar name={creator.name} tone={creator.tone} size={42} />
             <div style={{ flex: 1 }}>
@@ -249,6 +267,10 @@ export function DetailScreen({ model }: { model: Model }) {
                     title={toSlice ? toSlice.name : "No file in this model that a slicer can open"}>
               <Icon name="printer" size={17} /> Open in {slicerName}
             </button>
+            {cadName && toEdit &&
+              <button className="btn" style={{ width: "100%", marginTop: 10 }} onClick={openInCad} disabled={hydrating} title={toEdit.name}>
+                <Icon name="wand" size={17} /> Edit in {cadName}
+              </button>}
             <button className="btn" style={{ width: "100%", marginTop: 10 }} onClick={openFolder} disabled={hydrating}><Icon name="folder" size={17} /> Open folder</button>
             <button className="btn" style={{ width: "100%", marginTop: 10 }} onClick={copyPath} disabled={hydrating}><Icon name="link" size={16} /> Copy path</button>
           </div>

@@ -41,6 +41,10 @@ export const api = {
   splitFolder: (modelId: string) => invoke<Library[]>("split_folder", { modelId }),
   /** Undo splitFolder for a folder path: it becomes one model again. */
   unsplitFolder: (path: string) => invoke<Library[]>("unsplit_folder", { path }),
+  /** Name of the CAD program "Edit in …" starts, or null when there is none. */
+  cadName: () => invoke<string | null>("cad_name"),
+  /** Hand an indexed model file to the CAD program for editing. */
+  openInCad: (path: string) => invoke<void>("open_in_cad", { path }),
   listLibraries: () => invoke<Library[]>("list_libraries"),
   addLibrary: (path: string, name: string | null, options: ScanOptions) =>
     invoke<Library[]>("add_library", { path, name, options }),

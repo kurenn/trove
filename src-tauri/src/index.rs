@@ -1626,6 +1626,21 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             agg.insert(mid, (tv, parts as u32));
         }
     }
+    // The part count must agree with the detail view, which merges one part's
+    // formats (see part_key): count distinct parts, not part files.
+    {
+        let mut keys: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut pstmt = conn.prepare("SELECT model_id, path FROM files WHERE is_part")?;
+        let prows = pstmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for (mid, path) in prows.flatten() {
+            keys.entry(mid).or_default().insert(part_key(&path));
+        }
+        for (mid, set) in keys {
+            if let Some(entry) = agg.get_mut(&mid) {
+                entry.1 = set.len() as u32;
+            }
+        }
+    }
 
     // Batched tags for all models in one query.
     let mut tagmap: HashMap<String, Vec<String>> = HashMap::new();
@@ -1832,6 +1847,24 @@ pub fn get_dataset(db: State<Db>) -> Result<Dataset, String> {
     build_dataset(&conn).map_err(|e| e.to_string())
 }
 
+/// Identity of a part within a model: its folder + file stem, case-insensitively.
+/// Files that share it are the same part in different formats.
+fn part_key(path: &str) -> String {
+    let p = Path::new(path);
+    let dir = p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(path);
+    format!("{dir}\u{0}{}", stem.to_lowercase())
+}
+
+/// Viewer preference among a part's formats: meshes that load fast and reliably
+/// first, then project/CAD formats.
+fn format_rank(ext: &str) -> usize {
+    ["stl", "obj", "3mf", "step", "stp"]
+        .iter()
+        .position(|e| e.eq_ignore_ascii_case(ext))
+        .unwrap_or(usize::MAX)
+}
+
 /// Hydrate one model with the heavy fields the grid omits (full files, parts,
 /// extras, folder, desc) — fetched on demand when the detail view opens. Returns
 /// None if the id is gone (e.g. removed by a rescan between grid load and click).
@@ -1875,18 +1908,30 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
     let mut parts: Vec<Part> = Vec::new();
     let mut extras: Vec<ModelFile> = Vec::new();
     let mut file_types: Vec<String> = Vec::new();
-    let mut pidx = 0;
+    // One part per (folder, file stem): `arm.stl`, `arm.step` and `arm.3mf` side by
+    // side are the SAME part in three formats, not three parts.
+    let mut part_at: HashMap<String, usize> = HashMap::new();
     for fr in frows {
         let (fname, ftype, size, path, is_part, fgeo, fcol) = fr?;
         if !file_types.contains(&ftype) { file_types.push(ftype.clone()); }
+        let key = part_key(&path);
         let mf = ModelFile { name: fname.clone(), ftype: ftype.clone(), size, path: Some(path) };
         files.push(mf.clone());
         if is_part {
-            parts.push(Part { id: format!("{}-p{}", id, pidx), name: stem_of(&fname), geometry: fgeo, color: fcol, files: vec![mf] });
-            pidx += 1;
+            match part_at.get(&key) {
+                Some(&i) => parts[i].files.push(mf),
+                None => {
+                    part_at.insert(key, parts.len());
+                    parts.push(Part { id: format!("{}-p{}", id, parts.len()), name: stem_of(&fname), geometry: fgeo, color: fcol, files: vec![mf] });
+                }
+            }
         } else {
             extras.push(mf);
         }
+    }
+    // Within a part, the format the viewer loads most reliably comes first.
+    for p in &mut parts {
+        p.files.sort_by_key(|f| format_rank(&f.ftype));
     }
     let parts_count = parts.iter().filter(|p| !p.files.is_empty()).count() as u32;
     if parts.is_empty() {
@@ -2100,6 +2145,95 @@ pub fn unsplit_folder(app: tauri::AppHandle, db: State<Db>, path: String) -> Res
     rescan_library_of(&app, &db, Path::new(&path))
 }
 
+/// Setting key for the CAD program "Edit in CAD" starts (a command line, the
+/// file appended as its last argument). Empty/absent = SolidCraft when installed.
+const CAD_SETTING: &str = "cad_command";
+const DEFAULT_CAD_BIN: &str = "solidcraft";
+
+fn on_path(bin: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else { return false };
+    std::env::split_paths(&paths).any(|dir| {
+        let p = dir.join(bin);
+        p.is_file() || p.with_extension("exe").is_file()
+    })
+}
+
+/// The argv that opens `file` in the CAD program, plus the name to show for it.
+/// `custom` is the user's command; without one, SolidCraft is used if `default_ok`.
+fn cad_argv(custom: &str, file: &str, default_ok: bool) -> Result<(Vec<String>, String), String> {
+    let mut argv: Vec<String> = custom.split_whitespace().map(|w| w.to_string()).collect();
+    let name = if argv.is_empty() {
+        if !default_ok {
+            return Err("No CAD program found. Enter one in Settings → Libraries → CAD.".into());
+        }
+        argv.push(DEFAULT_CAD_BIN.to_string());
+        "SolidCraft".to_string()
+    } else {
+        "CAD".to_string()
+    };
+    argv.push(file.to_string());
+    Ok((argv, name))
+}
+
+fn setting_value(conn: &Connection, key: &str) -> Result<String, String> {
+    conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get::<_, String>(0))
+        .optional()
+        .map(|v| v.unwrap_or_default())
+        .map_err(|e| e.to_string())
+}
+
+/// The file must be one Trove indexed and still be on disk — handoff commands
+/// never launch anything on an arbitrary path from the webview.
+fn require_indexed_file(conn: &Connection, path: &str) -> Result<(), String> {
+    let known: bool = conn
+        .query_row("SELECT 1 FROM files WHERE path=?1 LIMIT 1", params![path], |_| Ok(true))
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(false);
+    if !known {
+        return Err("That file isn't in the index.".into());
+    }
+    Ok(())
+}
+
+fn spawn_detached(argv: &[String], what: &str) -> Result<(), String> {
+    std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Couldn't start the {what} ({}): {e}", argv[0]))
+}
+
+/// Name of the CAD program "Edit in …" would start, or None when there is none
+/// (no command set and SolidCraft isn't installed) — the UI hides the button then.
+#[tauri::command]
+pub fn cad_name(db: State<Db>) -> Result<Option<String>, String> {
+    let custom = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        setting_value(&conn, CAD_SETTING)?
+    };
+    Ok(cad_argv(&custom, "", on_path(DEFAULT_CAD_BIN)).ok().map(|(_, name)| name))
+}
+
+/// Hand one indexed model file to the CAD program for editing. Trove only starts
+/// the program; whatever it saves is its own business (and shows up on rescan).
+#[tauri::command]
+pub fn open_in_cad(db: State<Db>, path: String) -> Result<(), String> {
+    let custom = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        require_indexed_file(&conn, &path)?;
+        setting_value(&conn, CAD_SETTING)?
+    }; // DB lock released before spawning.
+    if !Path::new(&path).is_file() {
+        return Err("That file is no longer on disk.".into());
+    }
+    let (argv, _) = cad_argv(&custom, &path, on_path(DEFAULT_CAD_BIN))?;
+    spawn_detached(&argv, "CAD program")
+}
+
 /// Setting keys: which slicer "Open in slicer" starts ("bambu" | "orca" |
 /// "custom"; absent = "bambu"), and the command line used for "custom".
 const SLICER_APP_SETTING: &str = "slicer_app";
@@ -2210,35 +2344,15 @@ fn probe_slicer(app: &SlicerApp) -> SlicerProbe {
 pub fn open_in_slicer(db: State<Db>, path: String) -> Result<(), String> {
     let (app_key, custom) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let known: bool = conn
-            .query_row("SELECT 1 FROM files WHERE path=?1 LIMIT 1", params![path], |_| Ok(true))
-            .optional()
-            .map_err(|e| e.to_string())?
-            .unwrap_or(false);
-        if !known {
-            return Err("That file isn't in the index.".into());
-        }
-        let setting = |key: &str| -> Result<String, String> {
-            conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get::<_, String>(0))
-                .optional()
-                .map(|v| v.unwrap_or_default())
-                .map_err(|e| e.to_string())
-        };
-        (setting(SLICER_APP_SETTING)?, setting(SLICER_SETTING)?)
+        require_indexed_file(&conn, &path)?;
+        (setting_value(&conn, SLICER_APP_SETTING)?, setting_value(&conn, SLICER_SETTING)?)
     }; // DB lock released before probing/spawning.
     if !Path::new(&path).is_file() {
         return Err("That file is no longer on disk.".into());
     }
     let probe = slicer_app(&app_key).map(probe_slicer).unwrap_or_default();
     let argv = slicer_argv(&app_key, &custom, &path, std::env::consts::OS, &probe)?;
-    std::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("Couldn't start the slicer ({}): {e}", argv[0]))
+    spawn_detached(&argv, "slicer")
 }
 
 #[tauri::command]
@@ -3138,6 +3252,57 @@ mod tests {
         assert_eq!(rows, 0);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn one_part_per_stem_across_formats() {
+        let root = std::env::temp_dir().join(format!("trove_fmt_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // "arm" exists in three formats, "base" in one; a same-named file in a
+        // SUBFOLDER is a different part.
+        touch(&root.join("Maker/Stand/arm.step"), 900);
+        touch(&root.join("Maker/Stand/arm.stl"), 700);
+        touch(&root.join("Maker/Stand/Arm.3mf"), 800);
+        touch(&root.join("Maker/Stand/base.stl"), 600);
+        touch(&root.join("Maker/Stand/v2/arm.stl"), 650);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+
+        let ds = build_dataset(&conn).unwrap();
+        let slim = ds.models.iter().find(|m| m.name == "Stand").unwrap();
+        assert_eq!(slim.parts_count, 3, "arm (3 formats), base, v2/arm");
+        assert_eq!(slim.file_count, 5);
+
+        let full = build_model_full(&conn, &slim.id).unwrap().unwrap();
+        assert_eq!(full.parts.len(), 3);
+        assert_eq!(full.parts_count, slim.parts_count, "grid badge agrees with the detail view");
+        let arm = full.parts.iter().find(|p| p.files.len() == 3).expect("the three-format part");
+        // Viewer-friendly order within the part: mesh first, CAD last.
+        let order: Vec<&str> = arm.files.iter().map(|f| f.ftype.as_str()).collect();
+        assert_eq!(order, vec!["stl", "3mf", "step"]);
+        assert_eq!(full.files.len(), 5, "the flat file list still has every file");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cad_argv_resolution() {
+        let f = "/models/My Fox/fox v2.step";
+        // No command set: SolidCraft when it's installed, else a clear error.
+        let (argv, name) = cad_argv("", f, true).unwrap();
+        assert_eq!(argv, vec!["solidcraft", f]);
+        assert_eq!(name, "SolidCraft");
+        assert!(cad_argv("  ", f, false).unwrap_err().contains("Settings"));
+        // A custom command wins regardless; the file is one trailing argument.
+        let (argv, name) = cad_argv("freecad --single-instance", f, false).unwrap();
+        assert_eq!(argv, vec!["freecad", "--single-instance", f]);
+        assert_eq!(name, "CAD");
     }
 
     #[test]

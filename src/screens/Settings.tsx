@@ -80,6 +80,18 @@ export function SettingsScreen() {
     catch (e) { toast(String(e)); }
   };
 
+  // CAD program for "Edit in …" ("" = SolidCraft when installed). Saved on blur.
+  const [cadCmd, setCadCmd] = useState("");
+  useEffect(() => {
+    if (!isTauri) return;
+    api.getSetting("cad_command").then((v) => setCadCmd(v ?? "")).catch(() => {});
+  }, []);
+  const saveCadCmd = async () => {
+    if (!isTauri) { toast("CAD command saved"); return; }
+    try { await api.setSetting("cad_command", cadCmd.trim()); toast("CAD command saved"); }
+    catch (e) { toast(String(e)); }
+  };
+
   const [tab, setTab] = useState<TabId>(
     (import.meta.env.DEV ? (new URLSearchParams(window.location.search).get("settab") as TabId) : null) || "library"
   );
@@ -145,6 +157,18 @@ export function SettingsScreen() {
                            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
                   </div>
                 }
+              </div>
+              <div className="panel">
+                <div className="panel-h"><Icon name="wand" size={18} /> CAD</div>
+                <div className="set-row">
+                  <div>
+                    <div className="rt">CAD command</div>
+                    <div className="rd">“Edit in …” on a model’s page starts this program with the file as its last argument. Leave empty to use SolidCraft when it is installed.</div>
+                  </div>
+                  <input className="input btn-sm" style={{ width: 240, height: 32 }} value={cadCmd} placeholder="SolidCraft (auto)"
+                         spellCheck={false} onChange={(e) => setCadCmd(e.target.value)} onBlur={saveCadCmd}
+                         onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+                </div>
               </div>
             </div>
           )}

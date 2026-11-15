@@ -183,6 +183,12 @@
   background: color-mix(in srgb, var(--surface) 82%, transparent); color: var(--ink); backdrop-filter: blur(6px);
   display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono);
 }
+/* Formats a model is available in (detail header). */
+.format-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.format-chip {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 6px; background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line);
+}
 /* Print status: pill on cards/rows + the 3-way control on the detail screen. */
 .status-badge.st-queued  { background: color-mix(in srgb, var(--accent) 88%, transparent); color: #fff; }
 .status-badge.st-printed { background: color-mix(in srgb, #2f8f5b 88%, transparent); color: #fff; }

@@ -62,18 +62,32 @@ export const slicerId = (v: string | null | undefined): SlicerId =>
 export const slicerButtonName = (id: SlicerId) =>
   id === "custom" ? "slicer" : SLICERS.find((s) => s.id === id)!.label;
 
-/** File types a slicer opens, best first: a 3MF project carries plates and
-    settings, so it beats a bare mesh of the same model. */
-const SLICER_TYPES = ["3mf", "stl", "step", "stp", "obj"];
-/** The file "Open in slicer" should hand over: the selected part's file when it
-    is sliceable, else the best sliceable file in the model. Undefined when the
-    model has nothing a slicer can open (or isn't hydrated/on disk yet). */
-export function slicerFile(m: Model, selected?: ModelFile): ModelFile | undefined {
-  const rank = (t: string) => SLICER_TYPES.indexOf((t || "").toLowerCase());
-  if (selected?.path && rank(selected.type) >= 0) return selected;
-  return m.files
-    .filter((f) => f.path && rank(f.type) >= 0)
-    .sort((a, b) => rank(a.type) - rank(b.type))[0];
+/** Best file for a program among `selected` (the formats of the part in view),
+    else among all the model's files. `types` is the program's preference order.
+    Files without a path (mock data, not hydrated yet) can't be handed over. */
+function bestFile(m: Model, types: string[], selected?: ModelFile[]): ModelFile | undefined {
+  const rank = (t: string) => types.indexOf((t || "").toLowerCase());
+  const pick = (files: ModelFile[]) =>
+    files.filter((f) => f.path && rank(f.type) >= 0).sort((a, b) => rank(a.type) - rank(b.type))[0];
+  return pick(selected ?? []) ?? pick(m.files);
+}
+
+/** What "Open in slicer" hands over. A 3MF project carries plates and settings,
+    so it beats a bare mesh of the same part. Undefined = nothing sliceable. */
+export const slicerFile = (m: Model, selected?: ModelFile[]) =>
+  bestFile(m, ["3mf", "stl", "step", "stp", "obj"], selected);
+
+/** What "Edit in CAD" hands over: a native design or exact geometry (STEP)
+    before a mesh, which a CAD program can only treat as a dumb solid. */
+export const cadFile = (m: Model, selected?: ModelFile[]) =>
+  bestFile(m, ["sc", "step", "stp", "3mf", "stl", "obj"], selected);
+
+/** The model's formats for display, most "source-like" first: 3MF, STEP, STL… */
+export function formatsOf(m: Model): string[] {
+  const order = ["3mf", "step", "stp", "stl", "obj", "gcode"];
+  const rank = (t: string) => (order.indexOf(t) < 0 ? order.length : order.indexOf(t));
+  const types = (m.fileTypes ?? m.files.map((f) => f.type)).map((t) => t.toLowerCase());
+  return [...new Set(types)].filter((t) => order.includes(t)).sort((a, b) => rank(a) - rank(b));
 }
 
 export function fmtSize(bytes: number): string {

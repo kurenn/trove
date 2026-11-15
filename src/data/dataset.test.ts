@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName, canSplit, folderName } from "./dataset";
+import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf } from "./dataset";
 import { useApp } from "../lib/store";
 import { DEFAULT_FILTERS, type Filters, type Model, type GeometryKey, type Library } from "./types";
 
@@ -277,24 +277,41 @@ describe("applyFilters — print status", () => {
   });
 });
 
-describe("slicerFile", () => {
+describe("slicerFile / cadFile", () => {
   const file = (name: string, onDisk = true) => ({ name, type: name.split(".").pop()!, size: 1, path: onDisk ? "/lib/" + name : undefined });
 
-  it("uses the selected part when a slicer can open it", () => {
-    const stl = file("arm.stl");
-    const m = model({ files: [file("project.3mf"), stl] });
-    expect(slicerFile(m, stl)).toBe(stl);
+  it("picks the best format of the part in view: 3MF for the slicer, STEP for CAD", () => {
+    const arm = [file("arm.stl"), file("arm.3mf"), file("arm.step")];
+    const m = model({ files: [...arm, file("base.stl")] });
+    expect(slicerFile(m, arm)?.name).toBe("arm.3mf");
+    expect(cadFile(m, arm)?.name).toBe("arm.step");
   });
-  it("falls back to the best file in the model, a 3MF project before a mesh", () => {
-    const m = model({ files: [file("a.stl"), file("notes.txt"), file("project.3MF")] });
-    expect(slicerFile(m, file("scene.blend"))?.name).toBe("project.3MF");
+  it("uses the part's only format when that is all there is", () => {
+    const base = [file("base.stl")];
+    const m = model({ files: [file("project.3mf"), ...base] });
+    expect(slicerFile(m, base)?.name).toBe("base.stl");
+    expect(cadFile(m, base)?.name).toBe("base.stl");
+  });
+  it("falls back to the best file in the model when the part has nothing usable", () => {
+    const m = model({ files: [file("a.stl"), file("notes.txt"), file("project.3MF"), file("design.sc")] });
+    expect(slicerFile(m, [file("scene.blend")])?.name).toBe("project.3MF");
     expect(slicerFile(m)?.name).toBe("project.3MF");
+    expect(cadFile(m)?.name).toBe("design.sc"); // a native design beats everything
   });
-  it("returns nothing when no file is sliceable or on disk", () => {
+  it("returns nothing when no file is usable or on disk", () => {
     expect(slicerFile(model({ files: [file("scene.blend"), file("readme.pdf")] }))).toBeUndefined();
     // Mock/unhydrated files carry no path — there is nothing to hand over.
     expect(slicerFile(model({ files: [file("a.stl", false)] }))).toBeUndefined();
-    expect(slicerFile(model(), file("a.stl", false))).toBeUndefined();
+    expect(cadFile(model(), [file("a.step", false)])).toBeUndefined();
+  });
+});
+
+describe("formatsOf", () => {
+  it("lists a model's formats once each, source-like first, from slim or full data", () => {
+    expect(formatsOf(model({ fileTypes: ["stl", "png", "step", "3mf", "STL"] }))).toEqual(["3mf", "step", "stl"]);
+    const f = (type: string) => ({ name: "x." + type, type, size: 1 });
+    expect(formatsOf(model({ files: [f("obj"), f("stl"), f("txt")] }))).toEqual(["stl", "obj"]);
+    expect(formatsOf(model())).toEqual([]);
   });
 });
 
