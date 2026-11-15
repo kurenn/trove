@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Icon, Avatar, Tag } from "../components/Icons";
 import { Thumb, Viewer3D, type ViewerMode } from "../three/Viewer";
 import { MiniCard } from "../components/cards";
-import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel, versionFiles, type SlicerId } from "../data/dataset";
+import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, fileCount, cadFile, formatsOf, plateProject, plateLabel, versionFiles, type SlicerId } from "../data/dataset";
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
 import { isTauri, api, revealInManager, copyText, loadConvert } from "../lib/tauri";
@@ -175,6 +175,11 @@ export function DetailScreen({ model }: { model: Model }) {
   };
   const split = () => regroup(() => api.splitFolder(m.id), `Splitting “${m.name}” into separate models…`);
   const unsplit = () => m.splitParent && regroup(() => api.unsplitFolder(m.splitParent!), `Regrouping “${folderName(m.splitParent)}”…`);
+  // A loose file next to a folder of the same name: offer to move it in. This is
+  // the one action that changes files on disk, so it takes a second, explicit click.
+  const [confirmMove, setConfirmMove] = useState(false);
+  useEffect(() => { setConfirmMove(false); }, [m.id]);
+  const moveIn = () => m.belongsTo && regroup(() => api.moveIntoFolder(m.id), `Moved into “${folderName(m.belongsTo)}”`);
   const copyPath = async () => {
     try { await copyText(m.folder); toast("Path copied to clipboard"); }
     catch { toast("Path copied to clipboard"); }
@@ -335,6 +340,26 @@ export function DetailScreen({ model }: { model: Model }) {
                   </button>
                 )}
               </div>
+            </div>
+          }
+
+          {isTauri && !hydrating && m.belongsTo &&
+            <div className="panel hint-panel">
+              <div className="panel-h"><Icon name="folder" size={18} /> Belongs in “{folderName(m.belongsTo)}”?</div>
+              <p className="muted" style={{ fontSize: 13, margin: "0 0 10px" }}>
+                This loose file sits right next to a folder of the same name. Moving it in keeps the project together — it then shows up as a part (or a new version) of that model.
+              </p>
+              {!confirmMove
+                ? <button className="btn" style={{ width: "100%" }} onClick={() => setConfirmMove(true)}><Icon name="folder" size={16} /> Move into “{folderName(m.belongsTo)}”…</button>
+                : <>
+                    <p style={{ fontSize: 13, margin: "0 0 10px" }}>
+                      Move {fileCount(m)} file{fileCount(m) === 1 ? "" : "s"} on disk into <b>{m.belongsTo}</b>? Nothing is overwritten: a file whose name is already taken there is added as “name (2)”.
+                    </p>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="btn btn-primary" style={{ flex: 1 }} onClick={moveIn}>Move files</button>
+                      <button className="btn" style={{ flex: 1 }} onClick={() => setConfirmMove(false)}>Cancel</button>
+                    </div>
+                  </>}
             </div>
           }
 

@@ -958,6 +958,41 @@ fn shelf_facts(id: &str, folder: &str, split: &HashSet<PathBuf>) -> (bool, Optio
     (file_model, split_parent)
 }
 
+/// Name comparison key: letters and digits only, lower-cased — so
+/// `Garmin265_Staender`, `Garmin265 Staender` and `garmin265-staender` are equal.
+fn norm_name(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
+}
+
+/// Where each folder model sits: (parent folder, normalised folder name) → folder.
+/// A loose-file model with the same name in that parent folder "belongs" there.
+fn folder_homes(conn: &Connection) -> HashMap<(String, String), String> {
+    let mut homes = HashMap::new();
+    let Ok(mut st) = conn.prepare("SELECT id, folder FROM models") else { return homes };
+    let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) else { return homes };
+    for (id, folder) in rows.flatten() {
+        if id != format!("m{:x}", fnv1a(&folder)) {
+            continue; // a file model has no folder of its own
+        }
+        let p = Path::new(&folder);
+        if let (Some(parent), Some(name)) = (p.parent(), p.file_name().and_then(|n| n.to_str())) {
+            homes.insert((parent.to_string_lossy().to_string(), norm_name(name)), folder.clone());
+        }
+    }
+    homes
+}
+
+/// The folder a loose-file model belongs in, if a same-named folder model sits
+/// next to it. `name` is the model's display name; a file model that had to step
+/// aside for its folder twin carries a " (file)" suffix, which doesn't count.
+fn belongs_to(file_model: bool, name: &str, folder: &str, homes: &HashMap<(String, String), String>) -> Option<String> {
+    if !file_model {
+        return None;
+    }
+    let base = name.strip_suffix(" (file)").or_else(|| name.strip_suffix(" (File)")).unwrap_or(name);
+    homes.get(&(folder.to_string(), norm_name(base))).cloned()
+}
+
 /// Group collected directories into models. A directory is a **model root** when it
 /// directly holds loose media (a printable OR an image); a directory of only
 /// subfolders is a container (creator/tier/category) whose children are models in
@@ -1654,6 +1689,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
     }
 
     let split = load_split_dirs(conn);
+    let homes = folder_homes(conn);
 
     // Batched user-set print statuses for all models in one query.
     let mut statusmap: HashMap<String, String> = HashMap::new();
@@ -1691,6 +1727,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
         let tags = tagmap.remove(&id).unwrap_or_default();
         let print_status = statusmap.remove(&id).unwrap_or_default();
         let (file_model, split_parent) = shelf_facts(&id, &folder, &split);
+        let belongs_to = belongs_to(file_model, &name, &folder, &homes);
 
         models.push(Model {
             id, name, creator, collection, geometry, color, tags,
@@ -1709,7 +1746,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             thumb,   // raw cache path; frontend resolves to an asset URL
             preview, // raw folder-image path; frontend resolves to an asset URL
             dim_w, dim_d, dim_h,
-            file_types, parts_count, real: true, print_status, file_model, split_parent,
+            file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to,
         });
     }
 
@@ -2006,6 +2043,7 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
 
     let print_status = print_status_of(conn, &id);
     let (file_model, split_parent) = shelf_facts(&id, &folder, &load_split_dirs(conn));
+    let belongs_to = belongs_to(file_model, &name, &folder, &folder_homes(conn));
 
     Ok(Some(Model {
         id, name, creator, collection, geometry, color, tags, files,
@@ -2013,7 +2051,7 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
         parts, extras,
         print_time: None, filament: None, makes: None, volume: None,
         file_count, total_size, thumb, preview, dim_w, dim_d, dim_h,
-        file_types, parts_count, real: true, print_status, file_model, split_parent,
+        file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to,
     }))
 }
 
@@ -2460,6 +2498,90 @@ pub fn open_in_cad(db: State<Db>, path: String) -> Result<(), String> {
     }
     let (argv, _) = cad_argv(&custom, &path, on_path(DEFAULT_CAD_BIN))?;
     spawn_detached(&argv, "CAD program")
+}
+
+/// Plan moving `files` into `dest`: each keeps its name unless something is
+/// already there, in which case it gets " (2)", " (3)"… before the extension —
+/// nothing is ever overwritten. `taken` answers "is this path in use?" (the
+/// filesystem in production; a closure in tests), and names planned earlier in
+/// the same batch count as taken too.
+fn plan_moves(files: &[PathBuf], dest: &Path, taken: &dyn Fn(&Path) -> bool) -> Vec<(PathBuf, PathBuf)> {
+    let mut planned: HashSet<PathBuf> = HashSet::new();
+    files
+        .iter()
+        .filter_map(|from| {
+            let name = from.file_name()?.to_string_lossy().to_string();
+            let (stem, ext) = match name.rfind('.') {
+                Some(i) if i > 0 => (name[..i].to_string(), name[i..].to_string()),
+                _ => (name.clone(), String::new()),
+            };
+            let mut to = dest.join(&name);
+            let mut n = 2;
+            while taken(&to) || planned.contains(&to) {
+                to = dest.join(format!("{stem} ({n}){ext}"));
+                n += 1;
+            }
+            planned.insert(to.clone());
+            Some((from.clone(), to))
+        })
+        .collect()
+}
+
+/// Move a loose-file model's files into the same-named folder next to it — the
+/// one place Trove changes a library, and only because the user clicked it.
+/// Renames within the filesystem (no copy, so no half-written files), never
+/// overwrites, never deletes. Plate ticks follow the file. Starts a rescan.
+#[tauri::command]
+pub fn move_into_folder(app: tauri::AppHandle, db: State<Db>, model_id: String) -> Result<Vec<Library>, String> {
+    let (dest, files): (String, Vec<PathBuf>) = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let (name, folder): (String, String) = conn
+            .query_row("SELECT name, folder FROM models WHERE id=?1", params![model_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or("That model is no longer in the index.")?;
+        let file_model = shelf_facts(&model_id, &folder, &HashSet::new()).0;
+        let dest = belongs_to(file_model, &name, &folder, &folder_homes(&conn))
+            .ok_or("There is no matching folder next to this file.")?;
+        let mut st = conn.prepare("SELECT path FROM files WHERE model_id=?1").map_err(|e| e.to_string())?;
+        let files: Vec<PathBuf> = st
+            .query_map(params![model_id], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .map(PathBuf::from)
+            .collect();
+        (dest, files)
+    }; // No DB lock while touching the filesystem.
+    let dest_dir = Path::new(&dest);
+    if !dest_dir.is_dir() {
+        return Err("The folder is no longer on disk.".into());
+    }
+    let plan = plan_moves(&files, dest_dir, &|p| p.exists());
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut failure: Option<String> = None;
+    for (from, to) in plan {
+        // `rename` refuses to cross filesystems rather than copying — intended.
+        match std::fs::rename(&from, &to) {
+            Ok(()) => moved.push((from, to)),
+            Err(e) => {
+                failure = Some(format!("Couldn't move {}: {e}", file_name(&from)));
+                break;
+            }
+        }
+    }
+    if let Ok(conn) = db.0.lock() {
+        for (from, to) in &moved {
+            let _ = conn.execute(
+                "UPDATE OR REPLACE plate_status SET file_path=?2 WHERE file_path=?1",
+                params![from.to_string_lossy(), to.to_string_lossy()],
+            );
+        }
+    }
+    let libs = rescan_library_of(&app, &db, dest_dir)?;
+    match failure {
+        Some(msg) => Err(format!("{msg} ({} file(s) were moved before that.)", moved.len())),
+        None => Ok(libs),
+    }
 }
 
 /// Setting keys: which slicer "Open in slicer" starts ("bambu" | "orca" |
@@ -3660,6 +3782,68 @@ mod tests {
         assert!(full.parts.iter().find(|p| p.name == "clip").unwrap().versions.is_empty());
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn loose_file_next_to_its_folder_belongs_there() {
+        let root = std::env::temp_dir().join(format!("trove_home_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // A project folder, and loose files in the shelf root that are plainly its.
+        touch(&root.join("Garmin265_Staender/Garmin265_Staender_v3.3mf"), 500);
+        touch(&root.join("Garmin265_Staender_v4.3mf"), 600); // version of the folder's name → "(file)" twin
+        touch(&root.join("Kabel Clip/clip.stl"), 500);
+        touch(&root.join("kabel-clip.3mf"), 500); // same name, different separators/case
+        touch(&root.join("Hook.stl"), 500); // no folder of that name
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        // (name, is it the loose-file model?) → where it belongs.
+        let home = |name: &str, file: bool| {
+            ds.models.iter().find(|m| m.name == name && m.file_model == file)
+                .unwrap_or_else(|| panic!("{name}/{file}: {:?}", ds.models.iter().map(|m| (&m.name, m.file_model)).collect::<Vec<_>>()))
+                .belongs_to.clone()
+        };
+        let garmin = root.join("Garmin265_Staender").to_string_lossy().to_string();
+        let clip = root.join("Kabel Clip").to_string_lossy().to_string();
+
+        // A version of the folder's name had to step aside as "(file)" — it belongs there.
+        assert_eq!(home("Garmin265 Staender (file)", true), Some(garmin));
+        // Same name with other separators/case is recognised too.
+        assert_eq!(home("Kabel Clip", true), Some(clip));
+        // Folder models and unrelated loose files belong nowhere else.
+        assert_eq!(home("Kabel Clip", false), None);
+        assert_eq!(home("Garmin265 Staender", false), None);
+        assert_eq!(home("Hook", true), None);
+        // The hydrated record agrees with the slim one.
+        let id = ds.models.iter().find(|m| m.name == "Kabel Clip" && m.file_model).unwrap().id.clone();
+        assert!(build_model_full(&conn, &id).unwrap().unwrap().belongs_to.is_some());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn moves_never_overwrite() {
+        let dest = Path::new("/lib/Stand");
+        let files = vec![PathBuf::from("/lib/stand_v4.3mf"), PathBuf::from("/lib/stand_v4.png"), PathBuf::from("/lib/README")];
+        // Nothing in the way: names are kept.
+        let free = plan_moves(&files, dest, &|_| false);
+        assert_eq!(free[0].1, dest.join("stand_v4.3mf"));
+        assert_eq!(free[2].1, dest.join("README"));
+        // The project file already exists there, and so does its first alternative.
+        let taken = |p: &Path| p == dest.join("stand_v4.3mf") || p == dest.join("stand_v4 (2).3mf");
+        let plan = plan_moves(&files, dest, &taken);
+        assert_eq!(plan[0].1, dest.join("stand_v4 (3).3mf"));
+        assert_eq!(plan[1].1, dest.join("stand_v4.png"));
+        // Two incoming files with the same name don't collide with each other either.
+        let twins = vec![PathBuf::from("/a/x.stl"), PathBuf::from("/b/x.stl")];
+        let plan = plan_moves(&twins, dest, &|_| false);
+        assert_eq!((plan[0].1.clone(), plan[1].1.clone()), (dest.join("x.stl"), dest.join("x (2).stl")));
     }
 
     #[test]

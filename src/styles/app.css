@@ -189,6 +189,9 @@
   font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-transform: uppercase;
   padding: 2px 8px; border-radius: 6px; background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line);
 }
+/* Suggestions (a loose file that belongs in the folder next to it). */
+.hint-badge { background: color-mix(in srgb, #c98a1b 88%, transparent); color: #fff; }
+.hint-panel { border-color: color-mix(in srgb, #c98a1b 55%, var(--line)); }
 /* Versions of the selected part (detail screen, under the part list). */
 .version-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; font-size: 12.5px; }
 .version-chip {

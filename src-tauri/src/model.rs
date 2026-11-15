@@ -132,6 +132,10 @@ pub struct Model {
     /// the user (lets the UI offer to regroup it).
     #[serde(rename = "splitParent", default, skip_serializing_if = "Option::is_none")]
     pub split_parent: Option<String>,
+    /// For a loose-file model: the folder model right next to it with the same
+    /// name — where this file most likely belongs (the UI offers to move it there).
+    #[serde(rename = "belongsTo", default, skip_serializing_if = "Option::is_none")]
+    pub belongs_to: Option<String>,
     /** Cached thumbnail (asset path) once rendered. */
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumb: Option<String>,

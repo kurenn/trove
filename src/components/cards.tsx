@@ -62,6 +62,7 @@ export function ModelCard({ m, onOpen, fav, onFav }: CardProps) {
         </button>
         <div className="card-badges">
           <StatusBadge m={m} />
+          {m.belongsTo && <span className="card-badge hint-badge" title="A loose file next to a folder of the same name"><Icon name="folder" size={12} /> loose copy</span>}
           {!m.supports && <span className="card-badge"><Icon name="check" size={12} /> support-free</span>}
           {partCount(m) > 1
             ? <span className="card-badge"><Icon name="cube" size={12} /> {partCount(m)} parts</span>

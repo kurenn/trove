@@ -22,6 +22,30 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
+## 2026-11-15 — One exception to read-only: moving a loose file into its folder, on request
+
+**Decision:** a loose-file model with a same-named folder model right next to it
+(`Stand_v4.3mf` beside `Stand/`; names compared on letters and digits only) is flagged —
+a "loose copy" badge on its card, a suggestion on its page. Confirming it moves the
+model's files into that folder. This narrows *Read-only, forever* (below) for this fork;
+it does not replace it. The limits are the point: only on an explicit two-step click,
+only `rename` within one filesystem (never copy + delete, so no half-written files and
+no cross-device moves), never overwriting (a taken name becomes `name (2).ext`), never
+deleting. Plate ticks follow the moved file.
+**Because:** slicers save next to wherever a file was opened from, so projects leak
+loose copies into the parent folder; Trove can see that precisely, and "go fix it in
+the file manager" wastes the one moment the user is looking at it.
+**Rejected:** doing it automatically, or in bulk across the library — one wrong match
+then relocates many files. Overwriting an older same-named file — the two can differ
+(they did in the case that prompted this), and Trove can't know which one matters.
+Merging the loose file into the folder model in the index only — the mess on disk stays.
+**Unsure about:** `name (2).3mf` is safe but ugly, and it hides the file from version
+detection; suggesting the next free version number instead might be better. Whether
+upstream would want this at all — it is kept in its own commit so the rest stays
+offerable without it.
+**Affects:** `folder_homes` / `belongs_to` / `plan_moves` / `move_into_folder`,
+`Model.belongsTo`, the suggestion panel on Detail, the card badge.
+
 ## 2026-11-15 — Versions are read from file names; plates are read from the project on demand
 
 **Decision:** (1) a stem ending in a separator + `v<number>[letters]` (`stand_v4`,

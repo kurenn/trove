@@ -126,6 +126,9 @@ export interface Model {
   fileModel?: boolean;
   /** The folder this model was split out of by the user, if any (offer to regroup). */
   splitParent?: string;
+  /** For a loose-file model: the same-named folder next to it, where it most
+      likely belongs (offer to move it there). */
+  belongsTo?: string;
 }
 
 /* ── Quick Find launcher results (from the Rust quick_search command) ── */

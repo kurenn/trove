@@ -7,6 +7,7 @@ The section for each version becomes that version's GitHub release notes.
 ### Added
 - **Print status.** Mark a model as *To print* or *Printed* on its detail page. The status shows as a badge on cards and list rows, can be filtered in the sidebar, and survives rescans.
 - **Open in your slicer.** A button on the detail page hands the selected part — or the model's 3MF project — straight to Bambu Studio or OrcaSlicer (native or Flatpak). Choose which under Settings → Libraries → Slicer, or enter a custom command for any other slicer.
+- **Loose copies are spotted.** A loose file lying next to a folder of the same name — typically a project the slicer saved one level too high — gets a "loose copy" badge, and its page offers to move it into that folder. The move is the only thing Trove ever changes on disk: it asks first, never overwrites (a taken name becomes "name (2)"), and never deletes.
 - **Plates of a project, with a tick for each.** A multi-plate Bambu Studio / OrcaSlicer project lists its plates on the model's page — name and preview — and each can be marked printed, so a 25-plate build shows how far it is.
 - **Versions from file names.** `stand.3mf`, `stand_v2.3mf`, `stand_v4.3mf` are now one part with a version switcher, newest first; the buttons act on the version you pick.
 - **One part, several formats.** `arm.stl`, `arm.step` and `arm.3mf` in the same folder now show as one part with its formats, not three parts, and the model's page lists the formats it comes in. The slicer button picks the 3MF, the CAD button the STEP.
