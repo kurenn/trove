@@ -15,12 +15,28 @@ export const creatorById = (id: string) => data().CREATORS.find((c) => c.id === 
 export const collectionById = (id: string) => data().COLLECTIONS.find((c) => c.id === id);
 export const modelById = (id: string) => data().MODELS.find((m) => m.id === id);
 
+/** Tags that say what FORMAT a model is in, not what it IS. Nearly every model
+    carries one, so counting them as similarity made "similar" mean "also a 3MF". */
+const FORMAT_TAGS = new Set(["3mf", "stl", "step", "stp", "obj", "gcode", "blend"]);
+/** Words of a model name worth matching on: 4+ characters, not pure numbers. */
+const nameWords = (name: string) =>
+  new Set(name.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4 && !/^\d+$/.test(w)));
+
+/** Up to four models that have something real in common with `model`: a word in
+    the name (strongest), a descriptive tag, the same collection. Models with
+    nothing in common are not padded in — an empty list is a truthful answer. */
 export function similar(model: Model): Model[] {
+  const words = nameWords(model.name);
+  const tags = model.tags.filter((t) => !FORMAT_TAGS.has(t.toLowerCase()));
   return data().MODELS.filter((m) => m.id !== model.id)
     .map((m) => ({
       m,
-      score: m.tags.filter((t) => model.tags.includes(t)).length + (m.collection === model.collection ? 1 : 0),
+      score:
+        3 * [...nameWords(m.name)].filter((w) => words.has(w)).length +
+        m.tags.filter((t) => tags.includes(t)).length +
+        (m.collection && m.collection === model.collection ? 1 : 0),
     }))
+    .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, 4)
     .map((x) => x.m);

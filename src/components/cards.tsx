@@ -110,11 +110,16 @@ export function ListRow({ m, onOpen, fav, onFav }: CardProps) {
 
 export function MiniCard({ m, onOpen }: { m: Model; onOpen: (m: Model) => void }) {
   return (
-    <div className="model-card" style={{ minWidth: 160 }} onClick={() => onOpen(m)}>
+    <div className="model-card mini-card" onClick={() => onOpen(m)}>
       <Thumb geometry={m.geometry} color={m.color} modelId={m.id} real={isReal(m)} />
       <div className="card-body" style={{ padding: 11, gap: 4 }}>
         <div className="card-title" style={{ fontSize: 13.5 }}>{m.name}</div>
-        <div className="faint" style={{ fontSize: 11.5 }}>{m.printTime} · {m.filament}g</div>
+        {/* Print stats exist only for demo data; real models show file facts. */}
+        <div className="faint" style={{ fontSize: 11.5 }}>
+          {m.printTime != null
+            ? <>{m.printTime} · {m.filament}g</>
+            : <>{fileCount(m)} file{fileCount(m) === 1 ? "" : "s"} · {fmtSize(m.totalSize ?? m.files.reduce((n, f) => n + f.size, 0))}</>}
+        </div>
       </div>
     </div>
   );

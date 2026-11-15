@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel, versionFiles } from "./dataset";
+import { similar, applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel, versionFiles } from "./dataset";
 import { useApp } from "../lib/store";
 import { DEFAULT_FILTERS, type Filters, type Model, type GeometryKey, type Library } from "./types";
 
@@ -369,5 +369,24 @@ describe("versionFiles", () => {
   it("falls back to the part's own files without versions or with a stale index", () => {
     expect(versionFiles({ files: [f("clip.3mf")] }, 2)[0].name).toBe("clip.3mf");
     expect(versionFiles(part, 9)[0].name).toBe("stand_v4.3mf");
+  });
+});
+
+describe("similar", () => {
+  const seed = (models: Model[]) => useApp.setState({ data: { ...useApp.getState().data, MODELS: models } });
+  it("matches on name words and descriptive tags, never on format tags alone", () => {
+    const me = model({ id: "me", name: "Filament Swatch Holder", tags: ["3mf", "functional"] });
+    seed([
+      me,
+      model({ id: "name", name: "AMS Swatch System", tags: ["3mf"] }),
+      model({ id: "tag", name: "Cable Clip", tags: ["stl", "functional"] }),
+      model({ id: "format", name: "Dice Tower", tags: ["3mf"] }), // only shares the format
+    ]);
+    expect(similar(me).map((m) => m.id)).toEqual(["name", "tag"]);
+  });
+  it("returns nothing rather than padding with unrelated models", () => {
+    const me = model({ id: "me", name: "Odd One", tags: ["3mf"] });
+    seed([me, model({ id: "x", name: "Dice Tower", tags: ["3mf"] })]);
+    expect(similar(me)).toEqual([]);
   });
 });

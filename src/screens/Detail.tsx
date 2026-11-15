@@ -464,12 +464,12 @@ export function DetailScreen({ model }: { model: Model }) {
         </div>
       </div>
 
-      <div style={{ marginTop: 38 }}>
+      {sims.length > 0 && <div style={{ marginTop: 38 }}>
         <div className="panel-h" style={{ fontSize: 18, marginBottom: 16 }}><Icon name="wand" size={19} /> Similar models</div>
         <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 8 }}>
           {sims.map((s) => <MiniCard key={s.id} m={s} onOpen={(mm) => nav({ name: "model", id: mm.id })} />)}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
