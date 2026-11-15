@@ -142,6 +142,7 @@ export function ModelResults({ models, view, onOpen, fav, onFav }: ResultsProps)
       // libraries don't mount thousands of rows (each with a Thumb) at once.
       return (
         <VirtualGrid
+          key="list" // own instance: never inherit the grid's column count/row height
           items={models}
           keyOf={(m) => m.id}
           minCol={100000}
@@ -160,6 +161,7 @@ export function ModelResults({ models, view, onOpen, fav, onFav }: ResultsProps)
     // --grid-min 240 (comfy) / --gap 18 — windowed for large libraries.
     return (
       <VirtualGrid
+        key="grid"
         items={models}
         keyOf={(m) => m.id}
         minCol={240}

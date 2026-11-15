@@ -20,6 +20,7 @@ The section for each version becomes that version's GitHub release notes.
 
 ### Fixed
 - **STEP files load again.** The STEP loader couldn't find its WebAssembly module, so "View in 3D" on a STEP file always fell back to the placeholder.
+- **List view is a list again.** In libraries large enough to be windowed (150+ models), switching from grid to list kept the grid's columns and squeezed the rows into three narrow cards.
 - **Smoother scrolling on Linux.** The grid no longer stacks a blur layer on every card there.
 - **A prints folder with loose files at the top is no longer one giant model.** If the folder you mount has model files lying directly in it next to your project folders, each loose file is now its own model and the folders are indexed as before. Reindex once to pick this up.
 

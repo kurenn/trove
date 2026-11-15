@@ -82,8 +82,10 @@ export function VirtualGrid<T>({ items, keyOf, render, minCol, gap, overscanRows
       if (h > 0 && Math.abs(h - rowH) > 1) { setRowH(h); return; }
     }
     recompute();
+    // minCol/gap are deps too: switching grid ↔ list changes them without changing
+    // the items, and without a re-measure the list kept the grid's 3 columns.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, rowH, cols]);
+  }, [items, rowH, cols, minCol, gap]);
 
   // Recompute when the item set changes.
   useEffect(() => { recompute(); /* eslint-disable-next-line */ }, [items.length, rowH]);
