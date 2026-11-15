@@ -111,6 +111,8 @@ pub fn run() {
             index::open_in_slicer,
             index::cad_name,
             index::open_in_cad,
+            index::get_plates,
+            index::set_plate_printed,
             index::split_folder,
             index::unsplit_folder,
             index::list_libraries,

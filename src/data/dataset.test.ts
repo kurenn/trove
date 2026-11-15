@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf } from "./dataset";
+import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel } from "./dataset";
 import { useApp } from "../lib/store";
 import { DEFAULT_FILTERS, type Filters, type Model, type GeometryKey, type Library } from "./types";
 
@@ -341,5 +341,20 @@ describe("folder grouping helpers", () => {
     expect(folderName("/home/me/Prints/Mounts")).toBe("Mounts");
     expect(folderName("/home/me/Prints/Mounts/")).toBe("Mounts");
     expect(folderName("C:\\Prints\\Mounts")).toBe("Mounts");
+  });
+});
+
+describe("plates", () => {
+  const file = (name: string, onDisk = true) => ({ name, type: name.split(".").pop()!, size: 1, path: onDisk ? "/lib/" + name : undefined });
+  it("lists the plates of the part's 3MF, else the model's first 3MF", () => {
+    const m = model({ files: [file("a.stl"), file("all.3mf"), file("b.3MF")] });
+    expect(plateProject(m, [file("arm.stl"), file("arm.3mf")])?.name).toBe("arm.3mf");
+    expect(plateProject(m, [file("arm.stl")])?.name).toBe("all.3mf");
+    expect(plateProject(model({ files: [file("a.stl")] }))).toBeUndefined();
+    expect(plateProject(model({ files: [file("a.3mf", false)] }))).toBeUndefined(); // not on disk
+  });
+  it("labels an unnamed plate by its number", () => {
+    expect(plateLabel({ index: 3, name: "  " })).toBe("Plate 3");
+    expect(plateLabel({ index: 3, name: "03_hull" })).toBe("03_hull");
   });
 });

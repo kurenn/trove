@@ -2145,6 +2145,175 @@ pub fn unsplit_folder(app: tauri::AppHandle, db: State<Db>, path: String) -> Res
     rescan_library_of(&app, &db, Path::new(&path))
 }
 
+/// Value of `<metadata key="KEY" value="…"/>` inside an XML fragment — enough
+/// for the flat key/value config a slicer project carries, without an XML parser.
+fn xml_meta(fragment: &str, key: &str) -> Option<String> {
+    let at = fragment.find(&format!("key=\"{key}\""))?;
+    let rest = &fragment[at..];
+    let v = rest.find("value=\"")? + "value=\"".len();
+    let end = rest[v..].find('"')?;
+    Some(
+        rest[v..v + end]
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&"),
+    )
+}
+
+/// (plate number, name) for every `<plate>` in a project's
+/// `Metadata/model_settings.config` (Bambu Studio / OrcaSlicer), in file order.
+fn parse_plates_config(xml: &str) -> Vec<(u32, String)> {
+    xml.split("<plate>")
+        .skip(1)
+        .filter_map(|seg| {
+            let seg = seg.split("</plate>").next().unwrap_or(seg);
+            // Only the plate's own metadata — stop before its object instances.
+            let head = seg.split("<model_instance>").next().unwrap_or(seg);
+            let id: u32 = xml_meta(head, "plater_id")?.trim().parse().ok()?;
+            Some((id, xml_meta(head, "plater_name").unwrap_or_default().trim().to_string()))
+        })
+        .collect()
+}
+
+/// Plate number from a preview entry name: `Metadata/plate_3.png` → 3. The
+/// `_small`, `no_light`, `top_` and `pick_` variants are not plate previews.
+fn plate_png_index(entry: &str) -> Option<u32> {
+    let lower = entry.to_lowercase();
+    let file = lower.rsplit('/').next()?;
+    file.strip_prefix("plate_")?.strip_suffix(".png")?.parse().ok()
+}
+
+/// Read a slicer project's plates: (number, name, preview PNG bytes). Names come
+/// from the project config; a project without one still lists the plates it has
+/// previews for. Bounded reads — a project can be hundreds of MB, but only the
+/// small config and preview entries are touched.
+fn read_3mf_plates(path: &Path) -> Vec<(u32, String, Option<Vec<u8>>)> {
+    use std::io::Read;
+    const MAX_CONFIG: u64 = 16 * 1024 * 1024;
+    const MAX_PNG: u64 = 8 * 1024 * 1024;
+    let Ok(file) = std::fs::File::open(path) else { return Vec::new() };
+    let Ok(mut zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) else { return Vec::new() };
+    let names: Vec<String> = (0..zip.len())
+        .filter_map(|i| zip.by_index(i).ok().map(|f| f.name().to_string()))
+        .collect();
+
+    let mut plates: BTreeMap<u32, String> = BTreeMap::new();
+    if let Some(cfg) = names.iter().find(|n| n.to_lowercase().ends_with("metadata/model_settings.config")) {
+        if let Ok(entry) = zip.by_name(cfg) {
+            let mut xml = String::new();
+            if entry.take(MAX_CONFIG).read_to_string(&mut xml).is_ok() {
+                plates.extend(parse_plates_config(&xml));
+            }
+        }
+    }
+    // Small preview when there is one (it's what a list row needs), else the full one.
+    let mut pngs: BTreeMap<u32, String> = BTreeMap::new();
+    for n in &names {
+        if let Some(i) = plate_png_index(n) {
+            pngs.insert(i, n.clone());
+            plates.entry(i).or_default();
+        }
+    }
+    for n in &names {
+        let small = n.to_lowercase();
+        if let Some(i) = small.strip_suffix("_small.png").and_then(|b| plate_png_index(&format!("{b}.png"))) {
+            if plates.contains_key(&i) {
+                pngs.insert(i, n.clone());
+            }
+        }
+    }
+
+    plates
+        .into_iter()
+        .map(|(i, name)| {
+            let png = pngs.get(&i).and_then(|n| {
+                let entry = zip.by_name(n).ok()?;
+                let mut buf = Vec::new();
+                entry.take(MAX_PNG).read_to_end(&mut buf).ok()?;
+                (!buf.is_empty()).then_some(buf)
+            });
+            (i, name, png)
+        })
+        .collect()
+}
+
+/// Plates of a project file with their previews written to `cache_dir`, cached
+/// by (path, size, mtime) so a repeat visit never reopens the project file —
+/// which matters when the library is on a network share.
+fn cached_plates(path: &Path, cache_dir: &Path) -> Vec<Plate> {
+    let (size, mtime) = std::fs::metadata(path)
+        .map(|m| (m.len(), m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0)))
+        .unwrap_or((0, 0));
+    let key = format!("{:x}", fnv1a(&format!("{}|{size}|{mtime}", path.to_string_lossy())));
+    let index = cache_dir.join(format!("{key}.json"));
+    if let Some(cached) = std::fs::read(&index).ok().and_then(|b| serde_json::from_slice::<Vec<Plate>>(&b).ok()) {
+        return cached;
+    }
+    let _ = std::fs::create_dir_all(cache_dir);
+    let plates: Vec<Plate> = read_3mf_plates(path)
+        .into_iter()
+        .map(|(i, name, png)| {
+            let thumb = png.and_then(|bytes| {
+                let out = cache_dir.join(format!("{key}_{i}.png"));
+                std::fs::write(&out, bytes).ok().map(|_| out.to_string_lossy().to_string())
+            });
+            Plate { index: i, name, thumb, printed: false }
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_vec(&plates) {
+        let _ = std::fs::write(&index, json);
+    }
+    plates
+}
+
+fn printed_plates(conn: &Connection, path: &str) -> HashSet<u32> {
+    conn.prepare("SELECT plate FROM plate_status WHERE file_path=?1")
+        .and_then(|mut st| st.query_map(params![path], |r| r.get::<_, i64>(0)).map(|rows| rows.flatten().map(|n| n as u32).collect()))
+        .unwrap_or_default()
+}
+
+fn write_plate_printed(conn: &Connection, path: &str, plate: u32, printed: bool) -> Result<(), String> {
+    if printed {
+        conn.execute(
+            "INSERT OR IGNORE INTO plate_status (file_path,plate,printed_at) VALUES (?1,?2,datetime('now'))",
+            params![path, plate],
+        )
+    } else {
+        conn.execute("DELETE FROM plate_status WHERE file_path=?1 AND plate=?2", params![path, plate])
+    }
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// The build plates of an indexed slicer project (.3mf), each with its preview
+/// and whether the user ticked it off as printed. Empty for a file that isn't a
+/// slicer project. Reads the project once, then serves from the cache.
+#[tauri::command]
+pub fn get_plates(app: tauri::AppHandle, db: State<Db>, path: String) -> Result<Vec<Plate>, String> {
+    {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        require_indexed_file(&conn, &path)?;
+    } // No DB lock while reading the project file.
+    let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("plates");
+    let mut plates = cached_plates(Path::new(&path), &cache);
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let printed = printed_plates(&conn, &path);
+    for p in &mut plates {
+        p.printed = printed.contains(&p.index);
+    }
+    Ok(plates)
+}
+
+/// Tick a plate of a project file off as printed (or untick it).
+#[tauri::command]
+pub fn set_plate_printed(db: State<Db>, path: String, plate: u32, printed: bool) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    require_indexed_file(&conn, &path)?;
+    write_plate_printed(&conn, &path, plate, printed)
+}
+
 /// Setting key for the CAD program "Edit in CAD" starts (a command line, the
 /// file appended as its last argument). Empty/absent = SolidCraft when installed.
 const CAD_SETTING: &str = "cad_command";
@@ -3289,6 +3458,93 @@ mod tests {
         assert_eq!(full.files.len(), 5, "the flat file list still has every file");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // A minimal multi-plate slicer project: config + previews, like Bambu Studio writes.
+    fn write_plate_project(p: &Path) {
+        use std::io::Write;
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let mut zip = zip::ZipWriter::new(fs::File::create(p).unwrap());
+        let opt = zip::write::SimpleFileOptions::default();
+        let config = r#"<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <object id="2"><metadata key="name" value="not a plate"/></object>
+  <plate>
+    <metadata key="plater_id" value="1"/>
+    <metadata key="plater_name" value="01_hull &amp; keel"/>
+    <metadata key="thumbnail_file" value="Metadata/plate_1.png"/>
+    <model_instance><metadata key="object_id" value="2"/></model_instance>
+  </plate>
+  <plate>
+    <metadata key="plater_id" value="2"/>
+    <metadata key="plater_name" value=""/>
+    <model_instance><metadata key="plater_name" value="wrong scope"/></model_instance>
+  </plate>
+</config>"#;
+        zip.start_file("Metadata/model_settings.config", opt).unwrap();
+        zip.write_all(config.as_bytes()).unwrap();
+        for (name, bytes) in [
+            ("Metadata/plate_1.png", &b"BIG1"[..]),
+            ("Metadata/plate_1_small.png", &b"small1"[..]),
+            ("Metadata/plate_2.png", &b"BIG2"[..]),
+            ("Metadata/plate_no_light_1.png", &b"x"[..]),
+            ("Metadata/top_1.png", &b"x"[..]),
+            ("Metadata/pick_1.png", &b"x"[..]),
+        ] {
+            zip.start_file(name, opt).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn project_plates_are_read_cached_and_ticked_off() {
+        let root = std::env::temp_dir().join(format!("trove_plates_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let project = root.join("Boat/boat.3mf");
+        write_plate_project(&project);
+
+        // Names from the config (entity-decoded, plate scope only); the small preview
+        // wins where there is one; the non-preview PNG variants add no plates.
+        let raw = read_3mf_plates(&project);
+        assert_eq!(raw.len(), 2);
+        assert_eq!((raw[0].0, raw[0].1.as_str(), raw[0].2.as_deref()), (1, "01_hull & keel", Some(&b"small1"[..])));
+        assert_eq!((raw[1].0, raw[1].1.as_str(), raw[1].2.as_deref()), (2, "", Some(&b"BIG2"[..])));
+
+        // Cached: previews land in the cache dir, and a second call doesn't need the file.
+        let cache = root.join("cache");
+        let first = cached_plates(&project, &cache);
+        assert_eq!(first.len(), 2);
+        assert!(first.iter().all(|p| p.thumb.as_ref().is_some_and(|t| Path::new(t).is_file()) && !p.printed));
+        let moved = root.join("Boat/renamed.3mf");
+        let meta_before = fs::metadata(&project).unwrap().len();
+        assert!(meta_before > 0);
+        assert_eq!(cached_plates(&project, &cache), first, "second read is served from the cache");
+        // A file that isn't a slicer project (or isn't there) has no plates.
+        touch(&root.join("Boat/plain.3mf"), 64);
+        assert!(cached_plates(&root.join("Boat/plain.3mf"), &cache).is_empty());
+        assert!(cached_plates(&moved, &cache).is_empty());
+
+        // Ticking plates off persists per (file, plate) and can be undone.
+        let conn = crate::db::open(&root.join("test.db")).unwrap();
+        let path = project.to_string_lossy().to_string();
+        write_plate_printed(&conn, &path, 2, true).unwrap();
+        write_plate_printed(&conn, &path, 2, true).unwrap(); // idempotent
+        assert_eq!(printed_plates(&conn, &path), HashSet::from([2]));
+        assert!(printed_plates(&conn, "/elsewhere/boat.3mf").is_empty());
+        write_plate_printed(&conn, &path, 2, false).unwrap();
+        assert!(printed_plates(&conn, &path).is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plate_preview_names() {
+        assert_eq!(plate_png_index("Metadata/plate_12.png"), Some(12));
+        assert_eq!(plate_png_index("metadata/Plate_3.PNG"), Some(3));
+        for not_a_plate in ["Metadata/plate_1_small.png", "Metadata/plate_no_light_1.png", "Metadata/top_1.png", "Metadata/plate_x.png", "plate_1.jpg"] {
+            assert_eq!(plate_png_index(not_a_plate), None, "{not_a_plate}");
+        }
     }
 
     #[test]

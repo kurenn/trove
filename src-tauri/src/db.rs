@@ -109,6 +109,14 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
         -- one model. Absolute directory paths; consulted by every scan.
         CREATE TABLE IF NOT EXISTS split_dirs (path TEXT PRIMARY KEY);
 
+        -- Plates of a multi-plate slicer project (.3mf) the user ticked off as
+        -- printed. Keyed by the project file's absolute path + 1-based plate
+        -- index; a row means printed. Survives rescans like print_status.
+        CREATE TABLE IF NOT EXISTS plate_status (
+            file_path TEXT NOT NULL, plate INTEGER NOT NULL, printed_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(file_path, plate)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_models_library ON models(library_id);
         CREATE INDEX IF NOT EXISTS idx_files_model    ON files(model_id);
         CREATE INDEX IF NOT EXISTS idx_tags_model     ON tags(model_id);

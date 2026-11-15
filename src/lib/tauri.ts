@@ -1,7 +1,7 @@
 /* tauri.ts — thin bridge to the Rust backend. In a plain browser (dev/preview
    without Tauri) isTauri is false and callers fall back to mock data. */
 
-import type { Dataset, Library, ScanOptions, QuickResults, Model, PrintStatus } from "../data/types";
+import type { Dataset, Library, ScanOptions, QuickResults, Model, PrintStatus, Plate } from "../data/types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -45,6 +45,11 @@ export const api = {
   cadName: () => invoke<string | null>("cad_name"),
   /** Hand an indexed model file to the CAD program for editing. */
   openInCad: (path: string) => invoke<void>("open_in_cad", { path }),
+  /** Build plates of an indexed slicer project (.3mf) with previews + printed
+      flags; [] when the file isn't a slicer project. Thumbs are raw cache paths. */
+  getPlates: (path: string) => invoke<Plate[]>("get_plates", { path }),
+  setPlatePrinted: (path: string, plate: number, printed: boolean) =>
+    invoke<void>("set_plate_printed", { path, plate, printed }),
   listLibraries: () => invoke<Library[]>("list_libraries"),
   addLibrary: (path: string, name: string | null, options: ScanOptions) =>
     invoke<Library[]>("add_library", { path, name, options }),

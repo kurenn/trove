@@ -82,6 +82,15 @@ export const slicerFile = (m: Model, selected?: ModelFile[]) =>
 export const cadFile = (m: Model, selected?: ModelFile[]) =>
   bestFile(m, ["sc", "step", "stp", "3mf", "stl", "obj"], selected);
 
+/** The slicer project whose plates the detail page lists: the 3MF of the part in
+    view, else the model's first 3MF. Undefined when there is none on disk. */
+export function plateProject(m: Model, selected?: ModelFile[]): ModelFile | undefined {
+  const is3mf = (f: ModelFile) => !!f.path && (f.type || "").toLowerCase() === "3mf";
+  return (selected ?? []).find(is3mf) ?? m.files.find(is3mf);
+}
+/** "Plate 3" for an unnamed plate, else its name. */
+export const plateLabel = (p: { index: number; name: string }) => p.name.trim() || `Plate ${p.index}`;
+
 /** The model's formats for display, most "source-like" first: 3MF, STEP, STL… */
 export function formatsOf(m: Model): string[] {
   const order = ["3mf", "step", "stp", "stl", "obj", "gcode"];

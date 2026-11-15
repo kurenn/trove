@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import { Icon, Avatar, Tag } from "../components/Icons";
 import { Thumb, Viewer3D, type ViewerMode } from "../three/Viewer";
 import { MiniCard } from "../components/cards";
-import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, type SlicerId } from "../data/dataset";
+import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel, type SlicerId } from "../data/dataset";
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
-import { isTauri, api, revealInManager, copyText } from "../lib/tauri";
-import type { Creator, Library, Model, ModelFile, PrintStatus } from "../data/types";
+import { isTauri, api, revealInManager, copyText, loadConvert } from "../lib/tauri";
+import type { Creator, Library, Model, ModelFile, PrintStatus, Plate } from "../data/types";
 
 const UNKNOWN_CREATOR: Creator = { id: "", name: "Unknown", handle: "", models: 0, blurb: "", tone: "var(--ink-3)" };
 
@@ -124,6 +124,31 @@ export function DetailScreen({ model }: { model: Model }) {
     catch (e) { toast(String(e)); }
   };
   const formats = formatsOf(m);
+  // Plates of the slicer project in view, loaded on demand (the backend reads the
+  // project once, then serves from its cache). Listed only for multi-plate
+  // projects — for a single plate the model's print status says it all.
+  const project = plateProject(m, part.files);
+  const projectPath = project?.path;
+  const [plates, setPlates] = useState<Plate[]>([]);
+  useEffect(() => {
+    setPlates([]);
+    if (!isTauri || !projectPath) return;
+    let stale = false;
+    Promise.all([api.getPlates(projectPath), loadConvert()])
+      .then(([ps, conv]) => { if (!stale) setPlates(ps.map((p) => ({ ...p, thumb: p.thumb ? conv(p.thumb) : undefined }))); })
+      .catch(() => {});
+    return () => { stale = true; };
+  }, [projectPath]);
+  const platesDone = plates.filter((p) => p.printed).length;
+  const togglePlate = async (p: Plate) => {
+    if (!projectPath) return;
+    const printed = !p.printed;
+    // Optimistic: flip now, put it back if the write fails.
+    const flip = (v: boolean) => setPlates((ps) => ps.map((x) => (x.index === p.index ? { ...x, printed: v } : x)));
+    flip(printed);
+    try { await api.setPlatePrinted(projectPath, p.index, printed); }
+    catch (e) { flip(!printed); toast(String(e)); }
+  };
   const slicerName = slicerButtonName(slicer);
   const openInSlicer = async () => {
     if (!toSlice?.path) return;
@@ -284,6 +309,28 @@ export function DetailScreen({ model }: { model: Model }) {
               )}
             </div>
           </div>
+
+          {plates.length > 1 &&
+            <div className="panel">
+              <div className="panel-h"><Icon name="layers" size={18} /> Plates
+                <span className="faint" style={{ fontWeight: 500, marginLeft: 4 }}>{platesDone} of {plates.length} printed</span>
+              </div>
+              <div className="file-sub" style={{ margin: "-4px 0 8px" }}>{project?.name}</div>
+              <div className="plate-list">
+                {plates.map((p) =>
+                  <button key={p.index} className={"plate-row" + (p.printed ? " is-printed" : "")} onClick={() => togglePlate(p)}
+                          title={p.printed ? "Printed — click to undo" : "Mark this plate as printed"}>
+                    {p.thumb ? <img src={p.thumb} alt="" draggable={false} /> : <span className="plate-noimg"><Icon name="cube" size={18} /></span>}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="file-name">{plateLabel(p)}</div>
+                      <div className="file-sub">Plate {p.index}</div>
+                    </div>
+                    <span className="plate-check"><Icon name="check" size={14} /></span>
+                  </button>
+                )}
+              </div>
+            </div>
+          }
 
           {isTauri && !hydrating && (canSplit(m) || m.splitParent) &&
             <div className="panel">

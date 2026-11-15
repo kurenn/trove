@@ -23,6 +23,17 @@ export interface Part {
   files: ModelFile[];
 }
 
+/** One build plate of a slicer project (.3mf). */
+export interface Plate {
+  /** 1-based plate number, as the slicer shows it. */
+  index: number;
+  /** Plate name from the project; "" when it has none. */
+  name: string;
+  /** Cached preview image (asset URL once resolved). */
+  thumb?: string;
+  printed: boolean;
+}
+
 export interface Creator {
   id: string;
   name: string;

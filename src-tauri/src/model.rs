@@ -22,6 +22,20 @@ pub struct Part {
     pub files: Vec<ModelFile>,
 }
 
+/// One build plate of a slicer project (.3mf).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Plate {
+    /// 1-based plate number, as the slicer shows it.
+    pub index: u32,
+    /// The plate's name from the project, or "" when it has none.
+    pub name: String,
+    /// Cached plate preview (raw cache path; the frontend resolves it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumb: Option<String>,
+    /// Ticked off as printed by the user.
+    pub printed: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Creator {
     pub id: String,

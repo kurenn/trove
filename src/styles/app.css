@@ -189,6 +189,21 @@
   font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-transform: uppercase;
   padding: 2px 8px; border-radius: 6px; background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line);
 }
+/* Plates of a slicer project: tick-off list on the detail screen. */
+.plate-list { display: flex; flex-direction: column; gap: 4px; max-height: 380px; overflow-y: auto; }
+.plate-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 6px 8px;
+  border: 1px solid transparent; border-radius: var(--r-md); background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.plate-row:hover { background: var(--surface-2); }
+.plate-row img, .plate-noimg { width: 44px; height: 44px; border-radius: var(--r-sm); object-fit: cover; background: var(--surface-2); flex-shrink: 0; }
+.plate-noimg { display: inline-flex; align-items: center; justify-content: center; color: var(--ink-3); }
+.plate-check {
+  width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--line); flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center; color: transparent;
+}
+.plate-row.is-printed .plate-check { background: #2f8f5b; border-color: #2f8f5b; color: #fff; }
+.plate-row.is-printed .file-name { color: var(--ink-3); }
 /* Print status: pill on cards/rows + the 3-way control on the detail screen. */
 .status-badge.st-queued  { background: color-mix(in srgb, var(--accent) 88%, transparent); color: #fff; }
 .status-badge.st-printed { background: color-mix(in srgb, #2f8f5b 88%, transparent); color: #fff; }
