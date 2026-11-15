@@ -48,7 +48,12 @@ async function fetchBuffer(url: string): Promise<ArrayBuffer> {
 async function loadStep(buf: ArrayBuffer, color: string): Promise<THREE.Group> {
   // occt-import-js is heavy WASM — only loaded when a STEP file is opened.
   const mod = await import("occt-import-js");
-  const occt = await (mod.default as unknown as () => Promise<any>)();
+  // Tell the Emscripten loader where its .wasm lives. Left to itself it asks for
+  // a path next to its own (pre-bundled) script, gets the app's index.html back,
+  // and aborts with "module doesn't start with '\0asm'" — i.e. no STEP ever loads.
+  const wasmUrl = (await import("occt-import-js/dist/occt-import-js.wasm?url")).default;
+  const init = mod.default as unknown as (opts: { locateFile: (f: string) => string }) => Promise<any>;
+  const occt = await init({ locateFile: () => wasmUrl });
   const result = occt.ReadStepFile(new Uint8Array(buf), null);
   if (!result?.success || !result.meshes?.length) throw new Error("STEP parse failed");
   const group = new THREE.Group();

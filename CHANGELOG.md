@@ -19,6 +19,8 @@ The section for each version becomes that version's GitHub release notes.
 - **Split a category folder into its models.** A folder that is really a category — loose files that are separate things, plus project folders — can be split from its detail page: each loose file becomes its own model, each subfolder stays one. *Regroup* puts it back. Only the index changes; nothing moves on disk.
 
 ### Fixed
+- **STEP files load again.** The STEP loader couldn't find its WebAssembly module, so "View in 3D" on a STEP file always fell back to the placeholder.
+- **Smoother scrolling on Linux.** The grid no longer stacks a blur layer on every card there.
 - **A prints folder with loose files at the top is no longer one giant model.** If the folder you mount has model files lying directly in it next to your project folders, each loose file is now its own model and the folders are indexed as before. Reindex once to pick this up.
 
 ## [2.2.0]
