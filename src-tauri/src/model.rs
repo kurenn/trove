@@ -95,6 +95,9 @@ pub struct Model {
     /// the cached thumbnail instead of a procedural mock shape without the parts array.
     #[serde(default)]
     pub real: bool,
+    /// User-set print status: "" (none), "queued" (to print) or "printed".
+    #[serde(rename = "printStatus", default)]
+    pub print_status: String,
     /** Cached thumbnail (asset path) once rendered. */
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumb: Option<String>,

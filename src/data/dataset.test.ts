@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex } from "./dataset";
+import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf } from "./dataset";
 import { useApp } from "../lib/store";
 import { DEFAULT_FILTERS, type Filters, type Model, type GeometryKey, type Library } from "./types";
 
@@ -250,5 +250,50 @@ describe("librariesNeedingReindex", () => {
       library({ id: "mock" }), // mock/browser rows carry no flag at all
     ];
     expect(librariesNeedingReindex(libs).map((l) => l.id)).toEqual(["old"]);
+  });
+});
+
+describe("applyFilters — print status", () => {
+  const models = [
+    model({ id: "none" }), // no printStatus field at all, like a never-touched model
+    model({ id: "empty", printStatus: "" }),
+    model({ id: "todo", printStatus: "queued" }),
+    model({ id: "done", printStatus: "printed" }),
+  ];
+  const ids = (f: Filters) => applyFilters(models, "", f).map((m) => m.id).sort();
+
+  it("doesn't filter when no status is selected", () => {
+    expect(ids(filters())).toEqual(["done", "empty", "none", "todo"]);
+  });
+  it("keeps only models with a selected status", () => {
+    expect(ids(filters({ status: ["queued"] }))).toEqual(["todo"]);
+    expect(ids(filters({ status: ["printed"] }))).toEqual(["done"]);
+  });
+  it("treats several selected statuses as any-of", () => {
+    expect(ids(filters({ status: ["queued", "printed"] }))).toEqual(["done", "todo"]);
+  });
+  it("reads a missing status as none", () => {
+    expect(printStatusOf(models[0])).toBe("");
+  });
+});
+
+describe("slicerFile", () => {
+  const file = (name: string, onDisk = true) => ({ name, type: name.split(".").pop()!, size: 1, path: onDisk ? "/lib/" + name : undefined });
+
+  it("uses the selected part when a slicer can open it", () => {
+    const stl = file("arm.stl");
+    const m = model({ files: [file("project.3mf"), stl] });
+    expect(slicerFile(m, stl)).toBe(stl);
+  });
+  it("falls back to the best file in the model, a 3MF project before a mesh", () => {
+    const m = model({ files: [file("a.stl"), file("notes.txt"), file("project.3MF")] });
+    expect(slicerFile(m, file("scene.blend"))?.name).toBe("project.3MF");
+    expect(slicerFile(m)?.name).toBe("project.3MF");
+  });
+  it("returns nothing when no file is sliceable or on disk", () => {
+    expect(slicerFile(model({ files: [file("scene.blend"), file("readme.pdf")] }))).toBeUndefined();
+    // Mock/unhydrated files carry no path — there is nothing to hand over.
+    expect(slicerFile(model({ files: [file("a.stl", false)] }))).toBeUndefined();
+    expect(slicerFile(model(), file("a.stl", false))).toBeUndefined();
   });
 });

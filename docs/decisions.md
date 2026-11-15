@@ -22,6 +22,33 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
+## 2026-11-15 — "Open in slicer" spawns the slicer directly; print status lives in its own table
+
+**Decision:** two additions. (1) A model's print status (`queued` / `printed`, no row =
+none) is stored in a `print_status` table keyed by model id — not a column on `models`.
+(2) `open_in_slicer` starts the slicer as a child process with the file as its last
+argument: Bambu Studio by default (Flatpak, then `bambu-studio` on PATH, `open -a` on
+macOS, the default install path on Windows), or the `slicer_command` setting when set.
+The command only accepts a path that is in the `files` table.
+**Because:** (1) a rescan deletes and re-inserts `models` rows, so a column would be wiped
+by every rescan; a separate non-cascading table survives it the same way
+`collection_members` does. (2) "open with the OS default app" (the opener plugin) hands a
+`.3mf`/`.stl` to whatever the desktop associates with it — often an archive manager or a
+viewer, not the slicer — and can't target a Flatpak slicer at all.
+**Rejected:** the `bambustudio://open?file=` URL scheme — it expects a URL to download,
+so a local file would need a local HTTP server. The opener plugin with a named app — its
+scope model is per-path, not per-program, and it doesn't cover Flatpak. Running the
+custom command through a shell — would make spaces and quotes in file names an injection
+surface; the command is split on whitespace and the path is one argv entry instead, which
+means a program path containing spaces can't be expressed (acceptable: wrap it in a script).
+**Unsure about:** the Windows default path and the macOS app name are untested (no such
+machine at hand). Whether status should be per file/part rather than per model. Whether
+favorites — still in-memory only — should move into the same kind of table.
+**Affects:** `db.rs` (schema), `index.rs` (`set_print_status`, `open_in_slicer`,
+`slicer_argv`), `Model.printStatus`, the Print status facet, Settings → Libraries → Slicer.
+This does not weaken *Read-only, forever*: Trove still never writes to a model file; it
+starts another program that the user asked for.
+
 ## 2026-09-17 — After an update that changes indexing, prompt a reindex; never auto-rescan
 
 **Decision:** each library reports `stale` when its stored `scan_version:{id}` marker

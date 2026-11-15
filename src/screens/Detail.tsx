@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import { Icon, Avatar, Tag } from "../components/Icons";
 import { Thumb, Viewer3D, type ViewerMode } from "../three/Viewer";
 import { MiniCard } from "../components/cards";
-import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels } from "../data/dataset";
+import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES } from "../data/dataset";
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
-import { isTauri, revealInManager, copyText } from "../lib/tauri";
-import type { Creator, Model, ModelFile } from "../data/types";
+import { isTauri, api, revealInManager, copyText } from "../lib/tauri";
+import type { Creator, Model, ModelFile, PrintStatus } from "../data/types";
 
 const UNKNOWN_CREATOR: Creator = { id: "", name: "Unknown", handle: "", models: 0, blurb: "", tone: "var(--ink-3)" };
 
@@ -25,7 +25,15 @@ export function DetailScreen({ model }: { model: Model }) {
   const fav = useApp((s) => s.fav);
   const onFav = useApp((s) => s.toggleFav);
   const toast = useApp((s) => s.toast);
+  const setPrintStatus = useApp((s) => s.setPrintStatus);
   useDataset(); // re-render if the dataset swaps
+  // A custom slicer command (Settings → Libraries) relabels the button; without
+  // one the backend opens Bambu Studio, so the button says so.
+  const [customSlicer, setCustomSlicer] = useState(false);
+  useEffect(() => {
+    if (!isTauri) return;
+    api.getSetting("slicer_command").then((v) => setCustomSlicer(!!v?.trim())).catch(() => {});
+  }, []);
 
   // The grid ships slim models; pull the on-demand-hydrated full record (files,
   // parts, folder, desc) and fetch it on open. Until it lands the poster + identity
@@ -91,6 +99,23 @@ export function DetailScreen({ model }: { model: Model }) {
       catch (e) { toast(String(e)); return; }
     }
     toast("Revealed in your file manager");
+  };
+  // The slim grid row always carries the current status; the hydrated record is
+  // patched by the store on change, so either source is fresh.
+  const status = printStatusOf(m);
+  const changeStatus = async (next: PrintStatus) => {
+    try { await setPrintStatus(m.id, next); }
+    catch (e) { toast(String(e)); }
+  };
+  // What the slicer gets: the selected part if it's sliceable, else the model's
+  // best sliceable file (a 3MF project before a bare mesh).
+  const toSlice = slicerFile(m, partFile);
+  const slicerName = customSlicer ? "slicer" : "Bambu Studio";
+  const openInSlicer = async () => {
+    if (!toSlice?.path) return;
+    if (!isTauri) { toast(`Opening in ${slicerName}…`); return; }
+    try { await api.openInSlicer(toSlice.path); toast(`Opening ${toSlice.name} in ${slicerName}…`); }
+    catch (e) { toast(String(e)); }
   };
   const copyPath = async () => {
     try { await copyText(m.folder); toast("Path copied to clipboard"); }
@@ -207,8 +232,22 @@ export function DetailScreen({ model }: { model: Model }) {
                 <div className="file-sub" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.folder || (hydrating ? "Loading…" : "")}</div>
               </div>
             </div>
-            <button className="btn btn-primary" style={{ width: "100%", marginTop: 12 }} onClick={openFolder} disabled={hydrating}><Icon name="folder" size={17} /> Open folder</button>
+            <button className="btn btn-primary" style={{ width: "100%", marginTop: 12 }} onClick={openInSlicer} disabled={hydrating || !toSlice}
+                    title={toSlice ? toSlice.name : "No file in this model that a slicer can open"}>
+              <Icon name="printer" size={17} /> Open in {slicerName}
+            </button>
+            <button className="btn" style={{ width: "100%", marginTop: 10 }} onClick={openFolder} disabled={hydrating}><Icon name="folder" size={17} /> Open folder</button>
             <button className="btn" style={{ width: "100%", marginTop: 10 }} onClick={copyPath} disabled={hydrating}><Icon name="link" size={16} /> Copy path</button>
+          </div>
+
+          <div className="panel">
+            <div className="panel-h"><Icon name="printer" size={18} /> Print status</div>
+            <div className="status-seg" role="group" aria-label="Print status">
+              <button className={status === "" ? "is-active" : ""} onClick={() => changeStatus("")}>None</button>
+              {PRINT_STATUSES.map((s) =>
+                <button key={s.id} className={(status === s.id ? "is-active " : "") + "st-" + s.id} onClick={() => changeStatus(s.id)}>{s.label}</button>
+              )}
+            </div>
           </div>
 
           <div className="panel">

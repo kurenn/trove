@@ -1,7 +1,7 @@
 /* tauri.ts — thin bridge to the Rust backend. In a plain browser (dev/preview
    without Tauri) isTauri is false and callers fall back to mock data. */
 
-import type { Dataset, Library, ScanOptions, QuickResults, Model } from "../data/types";
+import type { Dataset, Library, ScanOptions, QuickResults, Model, PrintStatus } from "../data/types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -30,6 +30,12 @@ export const api = {
   removeFromCollection: (collectionId: string, modelId: string) =>
     invoke<Dataset>("remove_from_collection", { collectionId, modelId }),
   deleteCollection: (id: string) => invoke<Dataset>("delete_collection", { id }),
+  /** Set a model's print status ("" clears it). Returns the rebuilt dataset. */
+  setPrintStatus: (modelId: string, status: PrintStatus) =>
+    invoke<Dataset>("set_print_status", { modelId, status }),
+  /** Hand an indexed model file to the slicer (Bambu Studio unless a custom
+      command is set in Settings). Rejects with a readable message on failure. */
+  openInSlicer: (path: string) => invoke<void>("open_in_slicer", { path }),
   listLibraries: () => invoke<Library[]>("list_libraries"),
   addLibrary: (path: string, name: string | null, options: ScanOptions) =>
     invoke<Library[]>("add_library", { path, name, options }),

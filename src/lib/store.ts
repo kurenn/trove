@@ -2,7 +2,7 @@
    The dataset lives here so it can be swapped from mock → Rust index at runtime. */
 
 import { create } from "zustand";
-import type { Route, Dataset, Library, Model } from "../data/types";
+import type { Route, Dataset, Library, Model, PrintStatus } from "../data/types";
 import { MOCK_DATASET } from "../data/mock";
 import { isTauri, api, loadConvert } from "./tauri";
 
@@ -79,6 +79,8 @@ interface AppState {
   addToCollection: (collectionId: string, modelId: string) => Promise<void>;
   removeFromCollection: (collectionId: string, modelId: string) => Promise<void>;
   deleteCollection: (id: string) => Promise<void>;
+  /** Set a model's print status ("" clears it); persisted under Tauri. */
+  setPrintStatus: (modelId: string, status: PrintStatus) => Promise<void>;
 
   setName: (n: string) => void;
   setQuickfindShortcut: (acc: string) => void;
@@ -350,6 +352,23 @@ export const useApp = create<AppState>((set, get) => ({
     } else {
       const d = get().data;
       set({ data: { ...d, COLLECTIONS: d.COLLECTIONS.filter((c) => c.id !== id) } });
+    }
+  },
+
+  setPrintStatus: async (modelId, status) => {
+    // Patch the hydrated detail record too, so an open detail view updates
+    // without a refetch (the dataset rebuild only replaces the slim grid rows).
+    const patchDetail = (s: AppState) =>
+      s.details[modelId] ? { details: { ...s.details, [modelId]: { ...s.details[modelId], printStatus: status } } } : {};
+    if (isTauri) {
+      const raw = await api.setPrintStatus(modelId, status);
+      const { data, seeded } = await resolveAssets(raw, get().thumbs);
+      set((s) => ({ data, thumbs: seeded, ...patchDetail(s) }));
+    } else {
+      set((s) => ({
+        data: { ...s.data, MODELS: s.data.MODELS.map((m) => (m.id === modelId ? { ...m, printStatus: status } : m)) },
+        ...patchDetail(s),
+      }));
     }
   },
 

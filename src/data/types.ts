@@ -44,6 +44,9 @@ export interface Collection {
   members?: string[];
 }
 
+/** User-set print status. "" = none. Mirrors PRINT_STATUSES in index.rs. */
+export type PrintStatus = "" | "queued" | "printed";
+
 export interface Model {
   id: string;
   name: string;
@@ -96,6 +99,8 @@ export interface Model {
   partsCount?: number;
   /** True for real on-disk models — show the cached thumbnail, not a mock shape. */
   real?: boolean;
+  /** User-set print status ("queued" = to print, "printed"); absent/"" = none. */
+  printStatus?: PrintStatus;
 }
 
 /* ── Quick Find launcher results (from the Rust quick_search command) ── */
@@ -187,6 +192,8 @@ export interface Filters {
   types: string[];
   licenses: string[];
   supportFree: boolean;
+  /** Print statuses to keep (any-of); empty = don't filter by status. */
+  status: PrintStatus[];
   sort: "newest" | "popular" | "name" | "quick";
 }
 
@@ -195,6 +202,7 @@ export const DEFAULT_FILTERS: Filters = {
   types: [],
   licenses: [],
   supportFree: false,
+  status: [],
   sort: "newest",
 };
 

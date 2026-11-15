@@ -183,6 +183,21 @@
   background: color-mix(in srgb, var(--surface) 82%, transparent); color: var(--ink); backdrop-filter: blur(6px);
   display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono);
 }
+/* Print status: pill on cards/rows + the 3-way control on the detail screen. */
+.status-badge.st-queued  { background: color-mix(in srgb, var(--accent) 88%, transparent); color: #fff; }
+.status-badge.st-printed { background: color-mix(in srgb, #2f8f5b 88%, transparent); color: #fff; }
+.list-status {
+  font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 999px; margin-left: 6px;
+  display: inline-flex; align-items: center; gap: 4px; vertical-align: 1px;
+}
+.status-seg { display: flex; background: var(--surface-2); border-radius: var(--r-md); padding: 3px; gap: 2px; border: 1px solid var(--line); }
+.status-seg button {
+  flex: 1; height: 32px; border: none; background: none; border-radius: var(--r-sm); color: var(--ink-2);
+  cursor: pointer; font: inherit; font-size: 13px; font-weight: 600;
+}
+.status-seg button.is-active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px var(--shadow-color); }
+.status-seg button.is-active.st-queued  { color: var(--accent); }
+.status-seg button.is-active.st-printed { color: #2f8f5b; }
 .card-body { padding: var(--pad); display: flex; flex-direction: column; gap: 7px; flex: 1; }
 .card-title { font-family: var(--font-display); font-weight: 700; font-size: 15.5px; letter-spacing: -.01em; line-height: 1.2; }
 .card-meta { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-2); }

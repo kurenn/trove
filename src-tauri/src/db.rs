@@ -96,6 +96,14 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY(collection_id, model_id)
         );
 
+        -- Per-model print status set by the user ('queued' | 'printed'; no row =
+        -- none). Deliberately NOT a column on `models` and NOT cascading: a
+        -- rescan deletes and re-inserts model rows, and the status must survive
+        -- that the same way collection membership does.
+        CREATE TABLE IF NOT EXISTS print_status (
+            model_id TEXT PRIMARY KEY, status TEXT NOT NULL, updated TEXT NOT NULL DEFAULT ''
+        );
+
         CREATE INDEX IF NOT EXISTS idx_models_library ON models(library_id);
         CREATE INDEX IF NOT EXISTS idx_files_model    ON files(model_id);
         CREATE INDEX IF NOT EXISTS idx_tags_model     ON tags(model_id);

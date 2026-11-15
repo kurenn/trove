@@ -1557,6 +1557,16 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
         }
     }
 
+    // Batched user-set print statuses for all models in one query.
+    let mut statusmap: HashMap<String, String> = HashMap::new();
+    {
+        let mut sstmt = conn.prepare("SELECT model_id, status FROM print_status")?;
+        let srows = sstmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in srows.flatten() {
+            statusmap.insert(row.0, row.1);
+        }
+    }
+
     let mut stmt = conn.prepare(
         "SELECT id, name, creator, collection, geometry, color, license, source, source_url,
                 supports, added, file_count, total_size, thumb,
@@ -1581,6 +1591,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
 
         let (file_types, parts_count) = agg.remove(&id).unwrap_or_default();
         let tags = tagmap.remove(&id).unwrap_or_default();
+        let print_status = statusmap.remove(&id).unwrap_or_default();
 
         models.push(Model {
             id, name, creator, collection, geometry, color, tags,
@@ -1599,7 +1610,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             thumb,   // raw cache path; frontend resolves to an asset URL
             preview, // raw folder-image path; frontend resolves to an asset URL
             dim_w, dim_d, dim_h,
-            file_types, parts_count, real: true,
+            file_types, parts_count, real: true, print_status,
         });
     }
 
@@ -1806,13 +1817,15 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
         .filter_map(|t| t.ok())
         .collect();
 
+    let print_status = print_status_of(conn, &id);
+
     Ok(Some(Model {
         id, name, creator, collection, geometry, color, tags, files,
         license, source, source_url, supports, added, liked: false, desc, folder,
         parts, extras,
         print_time: None, filament: None, makes: None, volume: None,
         file_count, total_size, thumb, preview, dim_w, dim_d, dim_h,
-        file_types, parts_count, real: true,
+        file_types, parts_count, real: true, print_status,
     }))
 }
 
@@ -1904,6 +1917,133 @@ pub fn delete_collection(db: State<Db>, id: String) -> Result<Dataset, String> {
     conn.execute("DELETE FROM user_collections WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
     build_dataset(&conn).map_err(|e| e.to_string())
+}
+
+/// The statuses a model can carry. "" clears it (no row).
+const PRINT_STATUSES: [&str; 2] = ["queued", "printed"];
+
+fn print_status_of(conn: &Connection, model_id: &str) -> String {
+    conn.query_row("SELECT status FROM print_status WHERE model_id=?1", params![model_id], |r| r.get::<_, String>(0))
+        .optional()
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Store (or, for "", clear) a model's print status. Kept in its own table so it
+/// survives rescans, which delete and re-insert `models` rows.
+fn write_print_status(conn: &Connection, model_id: &str, status: &str) -> Result<(), String> {
+    if status.is_empty() {
+        conn.execute("DELETE FROM print_status WHERE model_id=?1", params![model_id])
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    if !PRINT_STATUSES.contains(&status) {
+        return Err(format!("Unknown print status '{status}'"));
+    }
+    conn.execute(
+        "INSERT INTO print_status (model_id,status,updated) VALUES (?1,?2,datetime('now'))
+         ON CONFLICT(model_id) DO UPDATE SET status=?2, updated=datetime('now')",
+        params![model_id, status],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Set a model's print status ("" | "queued" | "printed"). Returns the rebuilt dataset.
+#[tauri::command]
+pub fn set_print_status(db: State<Db>, model_id: String, status: String) -> Result<Dataset, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    write_print_status(&conn, &model_id, &status)?;
+    build_dataset(&conn).map_err(|e| e.to_string())
+}
+
+/// Setting key for a user-supplied slicer command (empty/absent = auto-detect).
+const SLICER_SETTING: &str = "slicer_command";
+
+/// What the host offers for launching Bambu Studio — probed once per launch and
+/// passed in, so `slicer_argv` stays a pure function the tests can drive.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SlicerProbe {
+    /// The Bambu Studio Flatpak is installed (Linux).
+    pub flatpak: bool,
+    /// A `bambu-studio` executable is on PATH.
+    pub on_path: bool,
+}
+
+/// Build the argv that opens `file` in the slicer. `custom` is the user's
+/// command from Settings: split on whitespace, with the file appended as the
+/// last argument (never interpolated into a shell — there is no shell).
+/// Without it, fall back to Bambu Studio wherever this OS keeps it.
+fn slicer_argv(custom: &str, file: &str, os: &str, probe: SlicerProbe) -> Result<Vec<String>, String> {
+    let words: Vec<String> = custom.split_whitespace().map(|w| w.to_string()).collect();
+    if !words.is_empty() {
+        let mut argv = words;
+        argv.push(file.to_string());
+        return Ok(argv);
+    }
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    match os {
+        "macos" => Ok(s(&["open", "-a", "BambuStudio", file])),
+        "windows" => Ok(s(&["C:\\Program Files\\Bambu Studio\\bambu-studio.exe", file])),
+        _ if probe.flatpak => Ok(s(&["flatpak", "run", "--file-forwarding", "com.bambulab.BambuStudio", "@@", file, "@@"])),
+        _ if probe.on_path => Ok(s(&["bambu-studio", file])),
+        _ => Err("Bambu Studio wasn't found. Set a slicer command in Settings → Libraries.".into()),
+    }
+}
+
+fn probe_slicer() -> SlicerProbe {
+    if !cfg!(target_os = "linux") {
+        return SlicerProbe::default();
+    }
+    let ok = |cmd: &str, args: &[&str]| {
+        std::process::Command::new(cmd)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|st| st.success())
+            .unwrap_or(false)
+    };
+    SlicerProbe {
+        flatpak: ok("flatpak", &["info", "com.bambulab.BambuStudio"]),
+        on_path: ok("sh", &["-c", "command -v bambu-studio"]),
+    }
+}
+
+/// Hand one indexed model file to the slicer (Bambu Studio by default). The path
+/// must be a file Trove indexed — this never launches anything on an arbitrary
+/// path from the webview. Trove only starts the slicer; it doesn't touch the file.
+#[tauri::command]
+pub fn open_in_slicer(db: State<Db>, path: String) -> Result<(), String> {
+    let custom = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let known: bool = conn
+            .query_row("SELECT 1 FROM files WHERE path=?1 LIMIT 1", params![path], |_| Ok(true))
+            .optional()
+            .map_err(|e| e.to_string())?
+            .unwrap_or(false);
+        if !known {
+            return Err("That file isn't in the index.".into());
+        }
+        conn.query_row("SELECT value FROM settings WHERE key=?1", params![SLICER_SETTING], |r| r.get::<_, String>(0))
+            .optional()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default()
+    }; // DB lock released before probing/spawning.
+    if !Path::new(&path).is_file() {
+        return Err("That file is no longer on disk.".into());
+    }
+    let probe = if custom.trim().is_empty() { probe_slicer() } else { SlicerProbe::default() };
+    let argv = slicer_argv(&custom, &path, std::env::consts::OS, probe)?;
+    std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Couldn't start the slicer ({}): {e}", argv[0]))
 }
 
 #[tauri::command]
@@ -2646,6 +2786,72 @@ mod tests {
         assert!(ds.collections.iter().filter(|c| c.id != "uc1").all(|c| c.members.is_none()));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn print_status_persists_across_rescan() {
+        let root = std::env::temp_dir().join(format!("trove_ps_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        touch(&root.join("Studio Voxel/Low Poly Fox/fox.stl"), 2048);
+        touch(&root.join("Studio Voxel/Dice Set/d20.stl"), 1024);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        assert!(ds.models.iter().all(|m| m.print_status.is_empty()), "no status by default");
+        let fox_id = ds.models.iter().find(|m| m.name == "Low Poly Fox").unwrap().id.clone();
+
+        write_print_status(&conn, &fox_id, "queued").unwrap();
+        write_print_status(&conn, &fox_id, "printed").unwrap(); // overwrite, not a second row
+        assert!(write_print_status(&conn, &fox_id, "bogus").is_err(), "unknown status is refused");
+
+        // A rescan deletes and re-inserts the model rows; the status must survive.
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        let status = |name: &str| ds.models.iter().find(|m| m.name == name).unwrap().print_status.clone();
+        assert_eq!(status("Low Poly Fox"), "printed");
+        assert_eq!(status("Dice Set"), "");
+        // The hydrated detail record agrees with the slim grid record.
+        assert_eq!(build_model_full(&conn, &fox_id).unwrap().unwrap().print_status, "printed");
+
+        write_print_status(&conn, &fox_id, "").unwrap();
+        assert_eq!(print_status_of(&conn, &fox_id), "", "empty status clears the row");
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM print_status", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn slicer_argv_resolution() {
+        let none = SlicerProbe::default();
+        let f = "/models/My Fox/fox v2.3mf";
+
+        // A custom command wins everywhere; the file is ONE trailing argument even
+        // with spaces in it (no shell, so nothing to quote or inject).
+        assert_eq!(
+            slicer_argv("  orca-slicer   --single-instance ", f, "linux", none).unwrap(),
+            vec!["orca-slicer", "--single-instance", f]
+        );
+
+        // Linux auto-detect: Flatpak first, then PATH, else a clear error.
+        let flatpak = SlicerProbe { flatpak: true, on_path: true };
+        assert_eq!(
+            slicer_argv("", f, "linux", flatpak).unwrap(),
+            vec!["flatpak", "run", "--file-forwarding", "com.bambulab.BambuStudio", "@@", f, "@@"]
+        );
+        let path_only = SlicerProbe { flatpak: false, on_path: true };
+        assert_eq!(slicer_argv("", f, "linux", path_only).unwrap(), vec!["bambu-studio", f]);
+        assert!(slicer_argv("", f, "linux", none).unwrap_err().contains("Settings"));
+
+        // macOS / Windows don't depend on the probe.
+        assert_eq!(slicer_argv("", f, "macos", none).unwrap(), vec!["open", "-a", "BambuStudio", f]);
+        assert_eq!(slicer_argv("", f, "windows", none).unwrap().len(), 2);
     }
 
     #[test]

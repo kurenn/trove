@@ -2,8 +2,8 @@
 
 import { useMemo, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { Icon } from "./Icons";
-import { useDataset } from "../data/dataset";
-import type { Filters, Model } from "../data/types";
+import { useDataset, PRINT_STATUSES, printStatusOf } from "../data/dataset";
+import type { Filters, Model, PrintStatus } from "../data/types";
 
 export function FacetGroup({ title, children, defaultOpen = true }: { title: ReactNode; children: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -32,21 +32,35 @@ export function FiltersPanel({ f, setF, models }: FiltersPanelProps) {
     const tags: Record<string, number> = {};
     const types: Record<string, number> = {};
     const licenses: Record<string, number> = {};
+    const status: Record<string, number> = {};
     let supportFree = 0;
     for (const m of models) {
       if (!m.supports) supportFree++;
+      const st = printStatusOf(m);
+      if (st) status[st] = (status[st] ?? 0) + 1;
       for (const t of m.tags) tags[t] = (tags[t] ?? 0) + 1;
       // Slim grid models carry `fileTypes`; mock falls back to the full files array.
       const ftypes = m.fileTypes ?? [...new Set(m.files.map((fl) => fl.type))];
       for (const ft of ftypes) types[ft] = (types[ft] ?? 0) + 1;
       if (m.license) licenses[m.license] = (licenses[m.license] ?? 0) + 1;
     }
-    return { tags, types, licenses, supportFree };
+    return { tags, types, licenses, supportFree, status };
   }, [models]);
   const toggle = (key: "tags" | "types" | "licenses", val: string) =>
     setF((s) => ({ ...s, [key]: s[key].includes(val) ? s[key].filter((x) => x !== val) : [...s[key], val] }));
+  const toggleStatus = (val: PrintStatus) =>
+    setF((s) => ({ ...s, status: s.status.includes(val) ? s.status.filter((x) => x !== val) : [...s.status, val] }));
   return (
     <div className="facets">
+      <FacetGroup title="Print status">
+        {PRINT_STATUSES.map((st) => (
+          <label key={st.id} className="check">
+            <input type="checkbox" checked={f.status.includes(st.id)} onChange={() => toggleStatus(st.id)} />
+            <span className="box"><Icon name="check" size={13} /></span>{st.label}
+            <span className="ct">{counts.status[st.id] ?? 0}</span>
+          </label>
+        ))}
+      </FacetGroup>
       <FacetGroup title="Print readiness">
         <label className="check">
           <input type="checkbox" checked={f.supportFree} onChange={() => setF((s) => ({ ...s, supportFree: !s.supportFree }))} />
