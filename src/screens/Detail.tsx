@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Icon, Avatar, Tag } from "../components/Icons";
 import { Thumb, Viewer3D, type ViewerMode } from "../three/Viewer";
 import { MiniCard } from "../components/cards";
-import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel, type SlicerId } from "../data/dataset";
+import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel, versionFiles, type SlicerId } from "../data/dataset";
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
 import { isTauri, api, revealInManager, copyText, loadConvert } from "../lib/tauri";
@@ -68,10 +68,16 @@ export function DetailScreen({ model }: { model: Model }) {
   // alphabetically first) can be slow/unparseable and would fall back to a shape.
   const stlIdx = Math.max(0, parts.findIndex((p) => (p.files[0]?.type || "").toLowerCase() === "stl"));
   const [sel, setSel] = useState(stlIdx);
+  // Which version of the selected part is in view (0 = newest). Everything below
+  // — viewer, slicer, CAD, plates — works on that version's files.
+  const [ver, setVer] = useState(0);
   // Re-init selection on model change AND when hydration swaps in the real parts.
-  useEffect(() => { setSel(stlIdx); setRealDims(null); setShow3D(false); setShowAllParts(false); }, [m.id, full]);
+  useEffect(() => { setSel(stlIdx); setVer(0); setRealDims(null); setShow3D(false); setShowAllParts(false); }, [m.id, full]);
   const part = parts[sel] || parts[0];
-  const partFile = part.files[0];
+  const partFiles = versionFiles(part, ver);
+  const partFile = partFiles[0];
+  const pickPart = (i: number) => { setSel(i); setVer(0); setRealDims(null); };
+  const pickVersion = (i: number) => { setVer(i); setRealDims(null); setShow3D(false); };
   // Project/source files anywhere in this model's folder tree (Blender, 3MF, etc.).
   const sourceFiles = m.files.filter((f) => SOURCE_TYPES.includes((f.type || "").toLowerCase()));
   // Cached local image used as the instant poster (downscaled render / rendered thumb).
@@ -115,9 +121,9 @@ export function DetailScreen({ model }: { model: Model }) {
   };
   // What the slicer gets: the selected part if it's sliceable, else the model's
   // best sliceable file (a 3MF project before a bare mesh).
-  const toSlice = slicerFile(m, part.files);
+  const toSlice = slicerFile(m, partFiles);
   // CAD gets the part's most editable format: a native design or STEP before a mesh.
-  const toEdit = cadFile(m, part.files);
+  const toEdit = cadFile(m, partFiles);
   const openInCad = async () => {
     if (!toEdit?.path) return;
     try { await api.openInCad(toEdit.path); toast(`Opening ${toEdit.name} in ${cadName}…`); }
@@ -127,7 +133,7 @@ export function DetailScreen({ model }: { model: Model }) {
   // Plates of the slicer project in view, loaded on demand (the backend reads the
   // project once, then serves from its cache). Listed only for multi-plate
   // projects — for a single plate the model's print status says it all.
-  const project = plateProject(m, part.files);
+  const project = plateProject(m, partFiles);
   const projectPath = project?.path;
   const [plates, setPlates] = useState<Plate[]>([]);
   useEffect(() => {
@@ -365,16 +371,30 @@ export function DetailScreen({ model }: { model: Model }) {
               {hydrating ? (
                 <div className="file-sub" style={{ padding: "10px 2px" }}>Loading parts…</div>
               ) : parts.slice(0, showAllParts ? parts.length : Math.max(PART_CAP, sel + 1)).map((p, i) =>
-                <button key={p.id} className={"part-row" + (i === sel ? " active" : "")} onClick={() => setSel(i)}>
+                <button key={p.id} className={"part-row" + (i === sel ? " active" : "")} onClick={() => pickPart(i)}>
                   <Thumb geometry={p.geometry} color={p.color} className="part-thumb" real={!!p.files[0]?.path} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="file-name">{p.name}</div>
-                    <div className="file-sub">{p.files.map((fl) => fl.type.toUpperCase()).join(" · ")} · {fmtSize(p.files.reduce((n, fl) => n + fl.size, 0))}</div>
+                    <div className="file-sub">
+                      {p.versions && <>{p.versions[0].label} · {p.versions.length} versions · </>}
+                      {p.files.map((fl) => fl.type.toUpperCase()).join(" · ")} · {fmtSize(p.files.reduce((n, fl) => n + fl.size, 0))}
+                    </div>
                   </div>
                   {i === sel && <Icon name="eye" size={17} style={{ color: "var(--accent)", flexShrink: 0 }} />}
                 </button>
               )}
             </div>
+            {part.versions &&
+              <div className="version-row" title="Versions of this part, from its file names">
+                <span className="faint">Version</span>
+                {part.versions.map((v, i) =>
+                  <button key={v.label} className={"version-chip" + (i === ver ? " is-active" : "")} onClick={() => pickVersion(i)}
+                          title={v.files.map((fl) => fl.name).join(", ")}>
+                    {v.label}{i === 0 ? " · newest" : ""}
+                  </button>
+                )}
+              </div>
+            }
             {parts.length > PART_CAP &&
               <button className="btn btn-sm" style={{ width: "100%", marginTop: 8 }} onClick={() => setShowAllParts((v) => !v)}>
                 {showAllParts ? "Show fewer" : `Show all ${parts.length} parts`}

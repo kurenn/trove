@@ -15,12 +15,22 @@ export interface ModelFile {
   path?: string;
 }
 
+/** One version of a part, recognised from its file name (stand_v4.3mf → "v4"). */
+export interface PartVersion {
+  /** "v4", "v11h", or "original" for the file without a version marker. */
+  label: string;
+  files: ModelFile[];
+}
+
 export interface Part {
   id: string;
   name: string;
   geometry: GeometryKey;
   color: string;
+  /** The part's files — of its newest version when it has several. */
   files: ModelFile[];
+  /** All versions, newest first; absent unless the part exists in at least two. */
+  versions?: PartVersion[];
 }
 
 /** One build plate of a slicer project (.3mf). */

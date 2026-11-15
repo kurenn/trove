@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel } from "./dataset";
+import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel, versionFiles } from "./dataset";
 import { useApp } from "../lib/store";
 import { DEFAULT_FILTERS, type Filters, type Model, type GeometryKey, type Library } from "./types";
 
@@ -356,5 +356,18 @@ describe("plates", () => {
   it("labels an unnamed plate by its number", () => {
     expect(plateLabel({ index: 3, name: "  " })).toBe("Plate 3");
     expect(plateLabel({ index: 3, name: "03_hull" })).toBe("03_hull");
+  });
+});
+
+describe("versionFiles", () => {
+  const f = (name: string) => ({ name, type: "3mf", size: 1, path: "/lib/" + name });
+  const part = { files: [f("stand_v4.3mf")], versions: [{ files: [f("stand_v4.3mf")] }, { files: [f("stand_v2.3mf")] }] };
+  it("returns the chosen version's files, newest at index 0", () => {
+    expect(versionFiles(part, 0)[0].name).toBe("stand_v4.3mf");
+    expect(versionFiles(part, 1)[0].name).toBe("stand_v2.3mf");
+  });
+  it("falls back to the part's own files without versions or with a stale index", () => {
+    expect(versionFiles({ files: [f("clip.3mf")] }, 2)[0].name).toBe("clip.3mf");
+    expect(versionFiles(part, 9)[0].name).toBe("stand_v4.3mf");
   });
 });

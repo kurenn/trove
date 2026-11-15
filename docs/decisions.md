@@ -22,6 +22,37 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
+## 2026-11-15 — Versions are read from file names; plates are read from the project on demand
+
+**Decision:** (1) a stem ending in a separator + `v<number>[letters]` (`stand_v4`,
+`Motor-V11h`) is a version of its base. Files of one base in one folder are one part
+whose `versions` list is newest first (a file without a marker is "original", the
+oldest); `part.files` is the newest version's. A part with a single version is left
+alone, name included. Loose shelf files group the same way, so `hook_v1.3mf` +
+`hook_v2.3mf` are one model. `SCAN_VERSION` 5 → 6. (2) A multi-plate slicer project
+(`.3mf` with `Metadata/model_settings.config`) lists its plates — number, name, preview
+— on the detail page, each tickable as printed (`plate_status`, keyed by file path +
+plate number). The project is read when its detail page first opens, then served from a
+cache keyed by (path, size, mtime).
+**Because:** (1) iterating on a design leaves `_v2`, `_v3`… next to each other; shown as
+separate parts they bury the current one. (2) for a 25-plate project a single
+model-level "printed" says nothing about where the print run stands.
+**Rejected:** (1) Trove keeping its own version history (snapshots, notes) — it would
+have to copy files, which breaks *Read-only, forever*. Fuzzy markers (`final`, `neu`,
+dates) — no order can be derived from them. Requiring no separator (`motorv8`) — too
+many false positives. (2) Extracting plates during the scan — it would open every
+project file on every scan, including on network shares, for data most models never
+show. Parsing with an XML crate — the config is flat key/value metadata; a 20-line
+scanner covers it without a dependency.
+**Unsure about:** `part_v2` vs `part_V2` vs `part_v02` collapse to one version label
+only by number, so `v2` and `v02` would be two entries. Plate ticks are keyed by path:
+renaming the project (e.g. to a new version!) starts from zero — arguably right, since
+a new version needs reprinting, but it is a side effect, not a decision. Sliced-plate
+data (time, filament) is in `slice_info.config` and is not read yet.
+**Affects:** `version_split` / `apply_versions` / `part_key`, `group_models` (shelf
+grouping), `read_3mf_plates` / `cached_plates` / `get_plates` / `set_plate_printed`,
+`Part.versions`, the Plates panel and version chips on Detail.
+
 ## 2026-11-15 — A part is a (folder, stem), not a file; "Edit in CAD" mirrors the slicer handoff
 
 **Decision:** (1) files in the same folder with the same stem (`arm.stl`, `arm.step`,

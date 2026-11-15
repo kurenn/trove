@@ -13,13 +13,25 @@ pub struct ModelFile {
     pub path: Option<String>,
 }
 
+/// One version of a part, recognised from its file name (`stand_v4.3mf` → "v4").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartVersion {
+    /// "v4", "v11h", or "original" for the file without a version marker.
+    pub label: String,
+    pub files: Vec<ModelFile>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Part {
     pub id: String,
     pub name: String,
     pub geometry: String,
     pub color: String,
+    /// The part's files — of its NEWEST version when it has several.
     pub files: Vec<ModelFile>,
+    /// All versions, newest first. Empty unless the part exists in at least two.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub versions: Vec<PartVersion>,
 }
 
 /// One build plate of a slicer project (.3mf).

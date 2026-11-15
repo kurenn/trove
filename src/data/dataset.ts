@@ -82,6 +82,13 @@ export const slicerFile = (m: Model, selected?: ModelFile[]) =>
 export const cadFile = (m: Model, selected?: ModelFile[]) =>
   bestFile(m, ["sc", "step", "stp", "3mf", "stl", "obj"], selected);
 
+/** The files of the version of `part` in view: version `index` (0 = newest) when
+    the part has versions, else simply the part's files. An out-of-range index
+    falls back to the newest, so a stale selection never shows nothing. */
+export function versionFiles(part: { files: ModelFile[]; versions?: { files: ModelFile[] }[] }, index: number): ModelFile[] {
+  return part.versions?.[index]?.files ?? part.files;
+}
+
 /** The slicer project whose plates the detail page lists: the 3MF of the part in
     view, else the model's first 3MF. Undefined when there is none on disk. */
 export function plateProject(m: Model, selected?: ModelFile[]): ModelFile | undefined {

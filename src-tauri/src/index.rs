@@ -745,7 +745,7 @@ const WALK_THREADS: usize = 16;
 /// `GENERIC_SEGMENTS`/`is_generic_segment`; v4 = `GENERIC_SEGMENTS` widened to
 /// cover the support-state/slicer/process buckets common in miniature
 /// releases, e.g. `Presupported`/`Chitubox`/`FDM`).
-const SCAN_VERSION: i64 = 5;
+const SCAN_VERSION: i64 = 6;
 
 /// A message from a walker thread to the DB writer.
 /// (Retained for the `bench_walk` benchmark; the live scan uses `collect_tree`.)
@@ -1060,7 +1060,8 @@ fn group_models(
         if let Some((files, mt)) = dirs.get(*shelf) {
             let mut by_stem: BTreeMap<String, Vec<ScannedFile>> = BTreeMap::new();
             for f in files {
-                by_stem.entry(stem_of(&f.name)).or_default().push(f.clone());
+                // Versions of one thing (hook_v1.3mf, hook_v2.3mf) are one model.
+                by_stem.entry(version_base(&stem_of(&f.name))).or_default().push(f.clone());
             }
             for (stem, group) in by_stem {
                 let mut vdir = shelf.join(&stem);
@@ -1847,13 +1848,69 @@ pub fn get_dataset(db: State<Db>) -> Result<Dataset, String> {
     build_dataset(&conn).map_err(|e| e.to_string())
 }
 
-/// Identity of a part within a model: its folder + file stem, case-insensitively.
-/// Files that share it are the same part in different formats.
+/// Split a file stem that ends in a version marker into (base, number, suffix):
+/// `stand_v4` → ("stand", 4, ""), `Motor-V11h` → ("Motor", 11, "h"). The marker
+/// needs a separator before it (so `motorv8` is not a version) and a non-empty
+/// base. None when the stem carries no version.
+fn version_split(stem: &str) -> Option<(String, u32, String)> {
+    let at = stem.rfind(|c| c == 'v' || c == 'V')?;
+    let tail = &stem[at + 1..];
+    let digits = tail.chars().take_while(|c| c.is_ascii_digit()).count();
+    let suffix = &tail[digits..];
+    if digits == 0 || digits > 4 || suffix.len() > 2 || !suffix.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let head = &stem[..at];
+    let base = head.trim_end_matches(|c| c == '_' || c == '-' || c == ' ' || c == '.');
+    if base.is_empty() || base.len() == head.len() {
+        return None; // no base, or no separator before the marker
+    }
+    Some((base.to_string(), tail[..digits].parse().ok()?, suffix.to_lowercase()))
+}
+
+/// A stem without its version marker (`stand_v4` → `stand`); unchanged when it has none.
+fn version_base(stem: &str) -> String {
+    version_split(stem).map(|(base, _, _)| base).unwrap_or_else(|| stem.to_string())
+}
+
+/// Identity of a part within a model: its folder + file stem (minus any version
+/// marker), case-insensitively. Files that share it are the same part — in
+/// different formats and/or versions.
 fn part_key(path: &str) -> String {
     let p = Path::new(path);
     let dir = p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(path);
-    format!("{dir}\u{0}{}", stem.to_lowercase())
+    format!("{dir}\u{0}{}", version_base(stem).to_lowercase())
+}
+
+/// Turn a part's files into versions when their names carry at least two
+/// different version markers (a file without one counts as "original", the
+/// oldest). The part is then named after the shared base and `files` becomes the
+/// newest version's; otherwise the part is left exactly as it is.
+fn apply_versions(part: &mut Part) {
+    // (sort key, label) per file; None = the unversioned original.
+    let ver = |f: &ModelFile| -> (Option<(u32, String)>, String) {
+        match version_split(&stem_of(&f.name)) {
+            Some((_, n, suf)) => (Some((n, suf.clone())), format!("v{n}{suf}")),
+            None => (None, "original".to_string()),
+        }
+    };
+    let mut groups: BTreeMap<Option<(u32, String)>, PartVersion> = BTreeMap::new();
+    for f in &part.files {
+        let (key, label) = ver(f);
+        groups.entry(key).or_insert_with(|| PartVersion { label, files: Vec::new() }).files.push(f.clone());
+    }
+    if groups.len() < 2 {
+        return;
+    }
+    // BTreeMap order is None (original) first, then ascending — reverse for newest first.
+    let mut versions: Vec<PartVersion> = groups.into_values().rev().collect();
+    for v in &mut versions {
+        v.files.sort_by_key(|f| format_rank(&f.ftype));
+    }
+    part.name = version_base(&stem_of(&part.files[0].name));
+    part.files = versions[0].files.clone();
+    part.versions = versions;
 }
 
 /// Viewer preference among a part's formats: meshes that load fast and reliably
@@ -1922,21 +1979,23 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
                 Some(&i) => parts[i].files.push(mf),
                 None => {
                     part_at.insert(key, parts.len());
-                    parts.push(Part { id: format!("{}-p{}", id, parts.len()), name: stem_of(&fname), geometry: fgeo, color: fcol, files: vec![mf] });
+                    parts.push(Part { id: format!("{}-p{}", id, parts.len()), name: stem_of(&fname), geometry: fgeo, color: fcol, files: vec![mf], versions: Vec::new() });
                 }
             }
         } else {
             extras.push(mf);
         }
     }
-    // Within a part, the format the viewer loads most reliably comes first.
+    // Within a part, the format the viewer loads most reliably comes first; then
+    // fold version-marked files (stand_v2, stand_v3…) into the part's versions.
     for p in &mut parts {
         p.files.sort_by_key(|f| format_rank(&f.ftype));
+        apply_versions(p);
     }
     let parts_count = parts.iter().filter(|p| !p.files.is_empty()).count() as u32;
     if parts.is_empty() {
         // safety: a model always has at least one part for the viewer
-        parts.push(Part { id: format!("{}-p0", id), name: name.clone(), geometry: geometry.clone(), color: color.clone(), files: vec![] });
+        parts.push(Part { id: format!("{}-p0", id), name: name.clone(), geometry: geometry.clone(), color: color.clone(), files: vec![], versions: Vec::new() });
     }
 
     let tags: Vec<String> = conn
@@ -3274,6 +3333,7 @@ mod tests {
         touch(&root.join("Cable Clip.3mf"), 900);
         touch(&root.join("Cable Clip.png"), 300); // same stem → joins the model
         touch(&root.join("Hook.stl"), 700);
+        touch(&root.join("Hook_v2.stl"), 700); // a version of Hook → same model
         touch(&root.join("notes.txt"), 10); // no model file with this stem → dropped
         touch(&root.join("Motor/housing.stl"), 1500);
         touch(&root.join("Motor/Parts/rotor.stl"), 1500);
@@ -3287,7 +3347,7 @@ mod tests {
 
         let by = |n: &str| models.iter().find(|g| file_name(&g.dir) == n).unwrap();
         assert_eq!(by("Cable Clip").files.len(), 2, "same-stem image joins its model");
-        assert_eq!(by("Hook").files.len(), 1);
+        assert_eq!(by("Hook").files.len(), 2, "versions of a loose file are one model");
         assert_eq!(by("Motor").files.len(), 2, "the folder model keeps its whole subtree");
         assert_eq!(by("Motor (file)").files.len(), 1);
 
@@ -3545,6 +3605,61 @@ mod tests {
         for not_a_plate in ["Metadata/plate_1_small.png", "Metadata/plate_no_light_1.png", "Metadata/top_1.png", "Metadata/plate_x.png", "plate_1.jpg"] {
             assert_eq!(plate_png_index(not_a_plate), None, "{not_a_plate}");
         }
+    }
+
+    #[test]
+    fn version_markers_are_recognised() {
+        let v = |s: &str| version_split(s).map(|(b, n, suf)| (b, n, suf));
+        assert_eq!(v("stand_v4"), Some(("stand".into(), 4, "".into())));
+        assert_eq!(v("Motor-V11h"), Some(("Motor".into(), 11, "h".into())));
+        assert_eq!(v("Garmin265 Staender v2"), Some(("Garmin265 Staender".into(), 2, "".into())));
+        // Not versions: no separator, no base, no number, or too much after the number.
+        for s in ["motorv8", "v2", "_v2", "valve", "stand_v", "stand_v2final", "stand_vase", "plate_12"] {
+            assert_eq!(v(s), None, "{s}");
+        }
+        assert_eq!(version_base("stand_v4"), "stand");
+        assert_eq!(version_base("stand"), "stand");
+    }
+
+    #[test]
+    fn versions_fold_into_one_part_newest_first() {
+        let root = std::env::temp_dir().join(format!("trove_ver_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // A stand in four versions (the first without a marker), v4 in two formats;
+        // a clip that merely has a "v" name; a lone versioned file.
+        touch(&root.join("Maker/Stand/stand.3mf"), 500);
+        touch(&root.join("Maker/Stand/stand_v2.3mf"), 500);
+        touch(&root.join("Maker/Stand/stand_v10.3mf"), 500);
+        touch(&root.join("Maker/Stand/stand_v4.3mf"), 500);
+        touch(&root.join("Maker/Stand/stand_v10.step"), 500);
+        touch(&root.join("Maker/Stand/clip.stl"), 500);
+        touch(&root.join("Maker/Stand/base_v3.stl"), 500);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        let slim = ds.models.iter().find(|m| m.name == "Stand").unwrap();
+        assert_eq!(slim.parts_count, 3, "stand (4 versions), clip, base_v3");
+
+        let full = build_model_full(&conn, &slim.id).unwrap().unwrap();
+        assert_eq!(full.parts.len(), 3);
+        let stand = full.parts.iter().find(|p| p.name == "stand").expect("named after the shared base");
+        let labels: Vec<&str> = stand.versions.iter().map(|v| v.label.as_str()).collect();
+        assert_eq!(labels, vec!["v10", "v4", "v2", "original"], "numeric order, newest first");
+        // The part's own files are the newest version's, viewer-friendly format first.
+        let newest: Vec<&str> = stand.files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(newest, vec!["stand_v10.3mf", "stand_v10.step"]);
+        // One version only → an ordinary part that keeps its full name.
+        let base = full.parts.iter().find(|p| p.name == "base_v3").expect("lone version keeps its name");
+        assert!(base.versions.is_empty());
+        assert!(full.parts.iter().find(|p| p.name == "clip").unwrap().versions.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
