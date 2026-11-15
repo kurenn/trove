@@ -745,7 +745,7 @@ const WALK_THREADS: usize = 16;
 /// `GENERIC_SEGMENTS`/`is_generic_segment`; v4 = `GENERIC_SEGMENTS` widened to
 /// cover the support-state/slicer/process buckets common in miniature
 /// releases, e.g. `Presupported`/`Chitubox`/`FDM`).
-const SCAN_VERSION: i64 = 7;
+const SCAN_VERSION: i64 = 8;
 
 /// A message from a walker thread to the DB writer.
 /// (Retained for the `bench_walk` benchmark; the live scan uses `collect_tree`.)
@@ -1355,6 +1355,33 @@ fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<Atom
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
+    // This pass opens these project files anyway, so it is also where a damaged
+    // one (an archive that doesn't open) is found and recorded — and skipped, so
+    // an older intact version can still give the model its picture.
+    let mut verdicts: Vec<(String, bool)> = Vec::new();
+    let rows: Vec<(String, String, String)> = rows
+        .into_iter()
+        .filter(|(_, path, ty)| {
+            if ty != "3mf" {
+                return true;
+            }
+            match archive_is_readable(Path::new(path)) {
+                Some(ok) => {
+                    verdicts.push((path.clone(), !ok));
+                    ok
+                }
+                None => false,
+            }
+        })
+        .collect();
+    if let Ok(conn) = db.0.lock() {
+        for (path, damaged) in &verdicts {
+            note_damaged(&conn, path, *damaged);
+        }
+    }
+    if verdicts.iter().any(|(_, damaged)| *damaged) {
+        let _ = app.emit("dataset-changed", ());
+    }
     // One candidate per model, preferring a .3mf over a .blend.
     let mut by_model: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
     for (id, path, ty) in rows {
@@ -1690,6 +1717,11 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
         }
     }
     let name_overrides = model_name_overrides(conn);
+    // Models with a damaged file (one join, not a lookup per model).
+    let damaged_models: HashSet<String> = conn
+        .prepare("SELECT DISTINCT f.model_id FROM files f JOIN damaged_files d ON d.path = f.path")
+        .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect()))
+        .unwrap_or_default();
 
     // Batched tags for all models in one query.
     let mut tagmap: HashMap<String, Vec<String>> = HashMap::new();
@@ -1742,6 +1774,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
         let (file_model, split_parent) = shelf_facts(&id, &folder, &split);
         let belongs_to = belongs_to(file_model, &name, &folder, &homes);
         let duplicates = dup_models.contains(&id);
+        let damaged = damaged_models.contains(&id);
         // A user rename wins for display; `belongs_to` above used the real name.
         let name = name_overrides.get(&id).cloned().unwrap_or(name);
 
@@ -1762,7 +1795,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             thumb,   // raw cache path; frontend resolves to an asset URL
             preview, // raw folder-image path; frontend resolves to an asset URL
             dim_w, dim_d, dim_h,
-            file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to, duplicates,
+            file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to, duplicates, damaged,
         });
     }
 
@@ -1968,6 +2001,30 @@ fn version_base(stem: &str) -> String {
     name_version(stem).0
 }
 
+fn damaged_paths(conn: &Connection) -> HashSet<String> {
+    conn.prepare("SELECT path FROM damaged_files")
+        .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect()))
+        .unwrap_or_default()
+}
+
+/// Whether a .3mf opens as an archive at all. A copy that was cut short has its
+/// file headers but no central directory, so this is false for it. Reads only
+/// the end of the file. A file that can't be opened for another reason (gone,
+/// no permission) is NOT reported as damaged.
+fn archive_is_readable(path: &Path) -> Option<bool> {
+    let file = std::fs::File::open(path).ok()?;
+    Some(zip::ZipArchive::new(std::io::BufReader::new(file)).is_ok())
+}
+
+/// Record whether a project file is damaged (insert) or fine (remove).
+fn note_damaged(conn: &Connection, path: &str, damaged: bool) {
+    let _ = if damaged {
+        conn.execute("INSERT OR IGNORE INTO damaged_files (path) VALUES (?1)", params![path])
+    } else {
+        conn.execute("DELETE FROM damaged_files WHERE path=?1", params![path])
+    };
+}
+
 /// True when file `a` is a newer version than file `b`, going by their names.
 fn newer_file(a: &str, b: &str) -> bool {
     let key = |p: &str| name_version(Path::new(p).file_stem().and_then(|s| s.to_str()).unwrap_or("")).1;
@@ -2070,6 +2127,7 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
             r.get::<_, String>(5)?, r.get::<_, String>(6)?,
         ))
     })?;
+    let damaged = damaged_paths(conn);
     let mut files: Vec<ModelFile> = Vec::new();
     let mut parts: Vec<Part> = Vec::new();
     let mut extras: Vec<ModelFile> = Vec::new();
@@ -2081,7 +2139,7 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
         let (fname, ftype, size, path, is_part, fgeo, fcol) = fr?;
         if !file_types.contains(&ftype) { file_types.push(ftype.clone()); }
         let key = part_key(&path);
-        let mf = ModelFile { name: fname.clone(), ftype: ftype.clone(), size, path: Some(path) };
+        let mf = ModelFile { name: fname.clone(), ftype: ftype.clone(), size, damaged: damaged.contains(&path), path: Some(path) };
         files.push(mf.clone());
         if is_part {
             match part_at.get(&key) {
@@ -2119,6 +2177,7 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
     let duplicates = files.iter().any(|f| f.path.as_deref().is_some_and(is_copy))
         && parts.iter().any(|p| p.versions.iter().any(|v| v.label.ends_with(')')));
     let name = model_name_overrides(conn).remove(&id).unwrap_or(name);
+    let damaged = files.iter().any(|f| f.damaged);
 
     Ok(Some(Model {
         id, name, creator, collection, geometry, color, tags, files,
@@ -2126,7 +2185,7 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
         parts, extras,
         print_time: None, filament: None, makes: None, volume: None,
         file_count, total_size, thumb, preview, dim_w, dim_d, dim_h,
-        file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to, duplicates,
+        file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to, duplicates, damaged,
     }))
 }
 
@@ -2674,6 +2733,34 @@ pub fn move_into_folder(app: tauri::AppHandle, db: State<Db>, model_id: String) 
         Some(msg) => Err(format!("{msg} ({} file(s) were moved before that.)", moved.len())),
         None => Ok(libs),
     }
+}
+
+/// Move a DAMAGED project file to the system trash. Deliberately narrow: only a
+/// file Trove itself recorded as an unreadable archive, and to the trash — where
+/// it can be restored — never a permanent delete. Starts a rescan.
+#[tauri::command]
+pub fn trash_damaged_file(app: tauri::AppHandle, db: State<Db>, path: String) -> Result<Vec<Library>, String> {
+    {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        require_indexed_file(&conn, &path)?;
+        if !damaged_paths(&conn).contains(&path) {
+            return Err("Only a file marked as damaged can be moved to the trash from here.".into());
+        }
+    } // No DB lock while touching the filesystem.
+    let file = Path::new(&path);
+    // Re-check on disk right now: if it reads fine after all, it is not ours to remove.
+    if archive_is_readable(file) == Some(true) {
+        if let Ok(conn) = db.0.lock() {
+            note_damaged(&conn, &path, false);
+        }
+        return Err("That file opens fine now — it was not moved.".into());
+    }
+    trash::delete(file).map_err(|e| format!("Couldn't move the file to the trash: {e}"))?;
+    if let Ok(conn) = db.0.lock() {
+        note_damaged(&conn, &path, false);
+        let _ = conn.execute("DELETE FROM plate_status WHERE file_path=?1", params![path]);
+    }
+    rescan_library_of(&app, &db, file.parent().unwrap_or(file))
 }
 
 /// Setting keys: which slicer "Open in slicer" starts ("bambu" | "orca" |
@@ -4007,6 +4094,48 @@ mod tests {
         assert!(newer_file("/a/stand_v10.3mf", "/a/stand_v4.3mf"));
         assert!(!newer_file("/a/stand.3mf", "/a/stand_v2.3mf"));
         assert!(!newer_file("/a/x.3mf", "/a/y.3mf"), "unversioned files don't outrank each other");
+    }
+
+    #[test]
+    fn a_cut_short_project_is_damaged() {
+        let root = std::env::temp_dir().join(format!("trove_dmg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let good = root.join("Boat/boat.3mf");
+        write_plate_project(&good);
+        // The same project with its tail cut off: file headers, no central directory.
+        let bytes = fs::read(&good).unwrap();
+        let cut = root.join("Boat/boat_v2.3mf");
+        fs::write(&cut, &bytes[..bytes.len() / 2]).unwrap();
+
+        assert_eq!(archive_is_readable(&good), Some(true));
+        assert_eq!(archive_is_readable(&cut), Some(false));
+        assert_eq!(archive_is_readable(&root.join("Boat/missing.3mf")), None, "gone is not the same as damaged");
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let cut_path = cut.to_string_lossy().to_string();
+        note_damaged(&conn, &cut_path, true);
+        note_damaged(&conn, &cut_path, true); // idempotent
+
+        // Slim and hydrated records both carry it; the intact file is not marked.
+        let ds = build_dataset(&conn).unwrap();
+        let m = ds.models.iter().find(|m| m.name == "Boat").unwrap();
+        assert!(m.damaged);
+        let full = build_model_full(&conn, &m.id).unwrap().unwrap();
+        assert!(full.damaged);
+        let flagged: Vec<&str> = full.files.iter().filter(|f| f.damaged).map(|f| f.name.as_str()).collect();
+        assert_eq!(flagged, vec!["boat_v2.3mf"]);
+
+        // Reads fine again (or is gone) → no longer damaged.
+        note_damaged(&conn, &cut_path, false);
+        assert!(!build_dataset(&conn).unwrap().models.iter().any(|m| m.damaged));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

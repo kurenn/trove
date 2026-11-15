@@ -30,6 +30,8 @@ base64 = "0.22"
 notify = "6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Moves a file to the system trash (restorable) — for the one "remove a damaged file" action.
+trash = "5"
 zstd = "0.13"
 flate2 = "1"
 

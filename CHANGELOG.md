@@ -7,6 +7,7 @@ The section for each version becomes that version's GitHub release notes.
 ### Added
 - **Print status.** Mark a model as *To print* or *Printed* on its detail page. The status shows as a badge on cards and list rows, can be filtered in the sidebar, and survives rescans.
 - **Open in your slicer.** A button on the detail page hands the selected part — or the model's 3MF project — straight to Bambu Studio or OrcaSlicer (native or Flatpak). Choose which under Settings → Libraries → Slicer, or enter a custom command for any other slicer.
+- **Damaged projects are called out.** A `.3mf` that was cut short — an interrupted copy or download — used to just show no preview. It now gets a "damaged" badge, its page says which file and why, and you can move it to the system trash from there (restorable).
 - **Duplicates are spotted.** A second download — `name(2).3mf` next to `name.3mf` — no longer shows as a second model: it joins the first as a copy, and the card says "duplicate".
 - **Rename a model.** Click the pencil next to a model's name to give it one of your own. Only the name Trove shows changes — files and folders keep theirs — and search finds the new name.
 - **STEP models get a preview.** A model that only has STEP files now gets a rendered thumbnail instead of a blank tile.

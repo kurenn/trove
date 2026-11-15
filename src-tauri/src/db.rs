@@ -117,6 +117,12 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY(file_path, plate)
         );
 
+        -- Project files (.3mf) found to be unreadable archives — typically a
+        -- copy that was cut short. Written by the preview pass, which is the
+        -- one place that opens them anyway; a row is removed when the file
+        -- reads fine again.
+        CREATE TABLE IF NOT EXISTS damaged_files (path TEXT PRIMARY KEY);
+
         CREATE INDEX IF NOT EXISTS idx_models_library ON models(library_id);
         CREATE INDEX IF NOT EXISTS idx_files_model    ON files(model_id);
         CREATE INDEX IF NOT EXISTS idx_tags_model     ON tags(model_id);

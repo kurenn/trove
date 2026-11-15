@@ -190,6 +190,12 @@ export function DetailScreen({ model }: { model: Model }) {
   const [confirmMove, setConfirmMove] = useState(false);
   useEffect(() => { setConfirmMove(false); }, [m.id]);
   const moveIn = () => m.belongsTo && regroup(() => api.moveIntoFolder(m.id), `Moved into “${folderName(m.belongsTo)}”`);
+  // Damaged files (unreadable archives). Each can go to the system trash — a
+  // second explicit click, and restorable from there. `trashAsk` = path awaiting it.
+  const damagedFiles = m.files.filter((f) => f.damaged && f.path);
+  const [trashAsk, setTrashAsk] = useState<string | null>(null);
+  useEffect(() => { setTrashAsk(null); }, [m.id]);
+  const trash = (f: ModelFile) => regroup(() => api.trashDamagedFile(f.path!), `Moved ${f.name} to the trash`);
   const copyPath = async () => {
     try { await copyText(m.folder); toast("Path copied to clipboard"); }
     catch { toast("Path copied to clipboard"); }
@@ -357,6 +363,30 @@ export function DetailScreen({ model }: { model: Model }) {
                   </button>
                 )}
               </div>
+            </div>
+          }
+
+          {isTauri && !hydrating && damagedFiles.length > 0 &&
+            <div className="panel danger-panel">
+              <div className="panel-h"><Icon name="info" size={18} /> Damaged file{damagedFiles.length > 1 ? "s" : ""}</div>
+              <p className="muted" style={{ fontSize: 13, margin: "0 0 10px" }}>
+                {damagedFiles.length > 1 ? "These files are" : "This file is"} incomplete — the archive has no table of contents, as after a copy that was cut short. No slicer can open {damagedFiles.length > 1 ? "them" : "it"}, which is also why there is no preview.
+              </p>
+              {damagedFiles.map((f) =>
+                <div key={f.path} className="damaged-row">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="file-name">{f.name}</div>
+                    <div className="file-sub">{fmtSize(f.size)}</div>
+                  </div>
+                  {trashAsk !== f.path
+                    ? <button className="btn btn-sm" onClick={() => setTrashAsk(f.path!)}>Move to trash…</button>
+                    : <>
+                        <button className="btn btn-sm btn-danger" onClick={() => trash(f)}>Move to trash</button>
+                        <button className="btn btn-sm" onClick={() => setTrashAsk(null)}>Cancel</button>
+                      </>}
+                </div>
+              )}
+              <p className="faint" style={{ fontSize: 12, margin: "8px 0 0" }}>The file goes to your system trash and can be restored from there.</p>
             </div>
           }
 

@@ -11,6 +11,9 @@ pub struct ModelFile {
     pub size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The file is an unreadable archive (e.g. a .3mf whose copy was cut short).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub damaged: bool,
 }
 
 /// One version of a part, recognised from its file name (`stand_v4.3mf` → "v4").
@@ -140,6 +143,9 @@ pub struct Model {
     /// with a "(2)"-style marker, as a second download or a duplicate gets.
     #[serde(default)]
     pub duplicates: bool,
+    /// True when one of the model's files is damaged (see `ModelFile::damaged`).
+    #[serde(default)]
+    pub damaged: bool,
     /** Cached thumbnail (asset path) once rendered. */
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumb: Option<String>,

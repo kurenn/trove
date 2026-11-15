@@ -22,6 +22,30 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
+## 2026-11-15 — Damaged projects are flagged, and can be moved to the trash
+
+**Decision:** the embedded-thumbnail pass — the one place that opens `.3mf` files anyway
+— records a project that does not open as an archive in `damaged_files` and skips it, so
+an older intact version can still supply the picture. The model gets a "damaged" badge,
+its page names the file and why, and offers **Move to trash**. That command is the second
+narrow exception to *Read-only*: it only accepts a path that is in `damaged_files`,
+re-checks the file on disk first, uses the system trash (restorable) via the `trash`
+crate, and needs a second click. `SCAN_VERSION` 7 → 8 so existing libraries get checked.
+**Because:** a copy that was cut short (an SD-card backup, an interrupted download) looks
+like any other project until it fails to preview with no reason given; the user then
+has nothing to act on.
+**Rejected:** a general "delete file" button — Trove is not a file manager, and a
+library tool that deletes on request eventually deletes the wrong thing. Permanent
+deletion — nothing here is worth being unrecoverable. Validating every archive on every
+scan — it opens every project file each time; only models still lacking a picture are
+checked, which is where a damaged file shows.
+**Unsure about:** a damaged OLDER version of a model that already has a picture is never
+opened, so never flagged. "Not a readable zip" also flags a `.3mf` that is some other
+format entirely — arguably also "can't be opened", but the wording says "incomplete".
+**Affects:** `generate_image_thumbs`, `archive_is_readable` / `note_damaged`,
+`trash_damaged_file`, `Model.damaged` / `ModelFile.damaged`, the panel on Detail, the
+`trash` dependency.
+
 ## 2026-11-15 — Copies and dotted versions join the version logic; renames are index-only
 
 **Decision:** (1) `name_version` replaces the first version parser: a trailing `(n)` is a

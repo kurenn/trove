@@ -13,6 +13,8 @@ export interface ModelFile {
   size: number; // bytes
   /** Absolute path on disk — populated by the Rust scanner (Phase 2+). */
   path?: string;
+  /** The file is an unreadable archive (e.g. a .3mf whose copy was cut short). */
+  damaged?: boolean;
 }
 
 /** One version of a part, recognised from its file name (stand_v4.3mf → "v4"). */
@@ -131,6 +133,8 @@ export interface Model {
   belongsTo?: string;
   /** True when the model holds a "(2)"-style copy of one of its own files. */
   duplicates?: boolean;
+  /** True when one of the model's files is damaged (see ModelFile.damaged). */
+  damaged?: boolean;
 }
 
 /* ── Quick Find launcher results (from the Rust quick_search command) ── */

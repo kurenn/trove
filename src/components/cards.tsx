@@ -62,6 +62,7 @@ export function ModelCard({ m, onOpen, fav, onFav }: CardProps) {
         </button>
         <div className="card-badges">
           <StatusBadge m={m} />
+          {m.damaged && <span className="card-badge danger-badge" title="A file in this model is damaged and can't be opened"><Icon name="info" size={12} /> damaged</span>}
           {m.duplicates && <span className="card-badge hint-badge" title="Holds a “(2)”-style copy of one of its files"><Icon name="layers" size={12} /> duplicate</span>}
           {m.belongsTo && <span className="card-badge hint-badge" title="A loose file next to a folder of the same name"><Icon name="folder" size={12} /> loose copy</span>}
           {!m.supports && <span className="card-badge"><Icon name="check" size={12} /> support-free</span>}
