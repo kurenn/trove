@@ -257,7 +257,7 @@ export function Viewer3D({ geometry, color, mode, autoRotate = true, filePath, f
     <div ref={mountRef} className="spool-viewer-canvas">
       {status === "loading" && <div className="viewer-loading"><Icon name="refresh" size={18} style={{ animation: "spin 1s linear infinite" }} /> loading mesh…</div>}
       {status === "error" && (fallbackImage
-        ? <div className="viewer-fallback"><img src={fallbackImage} alt="" draggable={false} /><span className="viewer-fallback-tag">preview image · 3D not available</span></div>
+        ? <div className="viewer-fallback"><img src={fallbackImage} alt="" draggable={false} /><span className="viewer-fallback-tag">preview image · no 3D model in this file</span></div>
         : <div className="viewer-error"><Icon name="cube" size={26} style={{ opacity: 0.4 }} /><span>Couldn't render a preview for this file.</span></div>
       )}
     </div>

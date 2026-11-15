@@ -242,6 +242,10 @@ export function DetailScreen({ model }: { model: Model }) {
                     <button className={"vtool" + (mode === "measure" ? " is-active" : "")} onClick={() => setMode("measure")}><Icon name="ruler" size={16} /> Measure</button>
                     {mode === "rotate" &&
                       <button className={"vtool" + (auto ? " is-active" : "")} onClick={() => setAuto(!auto)} title="Turntable"><Icon name="history" size={16} /></button>}
+                    {/* Way back from the live mesh to the instant picture (real models only —
+                        demo data has no picture to go back to). */}
+                    {!procedural && poster &&
+                      <button className="vtool" onClick={() => setShow3D(false)} title="Back to the preview picture"><Icon name="eye" size={16} /> Picture</button>}
                   </div>
                 </>
               ) : (
