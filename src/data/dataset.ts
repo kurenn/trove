@@ -41,6 +41,21 @@ export const PRINT_STATUSES: { id: Exclude<PrintStatus, "">; label: string }[] =
 export const printStatusOf = (m: Model): PrintStatus => m.printStatus ?? "";
 export const printStatusLabel = (s: PrintStatus) => PRINT_STATUSES.find((x) => x.id === s)?.label ?? "";
 
+/** Slicers "Open in slicer" can start. Ids mirror `slicer_app` in index.rs;
+    "custom" runs the command from Settings instead of a known app. */
+export const SLICERS = [
+  { id: "bambu", label: "Bambu Studio" },
+  { id: "orca", label: "OrcaSlicer" },
+  { id: "custom", label: "Custom command" },
+] as const;
+export type SlicerId = (typeof SLICERS)[number]["id"];
+/** Normalise a stored setting (unset/unknown → the default, Bambu Studio). */
+export const slicerId = (v: string | null | undefined): SlicerId =>
+  SLICERS.find((s) => s.id === v)?.id ?? "bambu";
+/** Name for the button: the app's name, or just "slicer" for a custom command. */
+export const slicerButtonName = (id: SlicerId) =>
+  id === "custom" ? "slicer" : SLICERS.find((s) => s.id === id)!.label;
+
 /** File types a slicer opens, best first: a 3MF project carries plates and
     settings, so it beats a bare mesh of the same model. */
 const SLICER_TYPES = ["3mf", "stl", "step", "stp", "obj"];

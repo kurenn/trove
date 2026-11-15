@@ -2008,41 +2008,90 @@ pub fn set_print_status(db: State<Db>, model_id: String, status: String) -> Resu
     build_dataset(&conn).map_err(|e| e.to_string())
 }
 
-/// Setting key for a user-supplied slicer command (empty/absent = auto-detect).
+/// Setting keys: which slicer "Open in slicer" starts ("bambu" | "orca" |
+/// "custom"; absent = "bambu"), and the command line used for "custom".
+const SLICER_APP_SETTING: &str = "slicer_app";
 const SLICER_SETTING: &str = "slicer_command";
 
-/// What the host offers for launching Bambu Studio — probed once per launch and
+/// Where one known slicer lives on each platform.
+struct SlicerApp {
+    name: &'static str,
+    /// Flatpak application ids, most likely first.
+    flatpak_ids: &'static [&'static str],
+    /// Executable name on PATH (Linux).
+    bin: &'static str,
+    /// Application name for `open -a` (macOS).
+    mac_app: &'static str,
+    /// Default install path (Windows).
+    win_path: &'static str,
+}
+
+const BAMBU_STUDIO: SlicerApp = SlicerApp {
+    name: "Bambu Studio",
+    flatpak_ids: &["com.bambulab.BambuStudio"],
+    bin: "bambu-studio",
+    mac_app: "BambuStudio",
+    win_path: "C:\\Program Files\\Bambu Studio\\bambu-studio.exe",
+};
+const ORCA_SLICER: SlicerApp = SlicerApp {
+    name: "OrcaSlicer",
+    flatpak_ids: &["io.github.softfever.OrcaSlicer", "com.orcaslicer.OrcaSlicer"],
+    bin: "orca-slicer",
+    mac_app: "OrcaSlicer",
+    win_path: "C:\\Program Files\\OrcaSlicer\\orca-slicer.exe",
+};
+
+/// The known slicer for a `slicer_app` setting value; None for "custom".
+/// Anything unrecognised (including unset) is Bambu Studio, the default.
+fn slicer_app(key: &str) -> Option<&'static SlicerApp> {
+    match key {
+        "custom" => None,
+        "orca" => Some(&ORCA_SLICER),
+        _ => Some(&BAMBU_STUDIO),
+    }
+}
+
+/// What the host offers for launching a known slicer — probed at click time and
 /// passed in, so `slicer_argv` stays a pure function the tests can drive.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SlicerProbe {
-    /// The Bambu Studio Flatpak is installed (Linux).
-    pub flatpak: bool,
-    /// A `bambu-studio` executable is on PATH.
+    /// The installed Flatpak id of the slicer, if any (Linux).
+    pub flatpak: Option<String>,
+    /// Its executable is on PATH (Linux).
     pub on_path: bool,
 }
 
-/// Build the argv that opens `file` in the slicer. `custom` is the user's
-/// command from Settings: split on whitespace, with the file appended as the
-/// last argument (never interpolated into a shell — there is no shell).
-/// Without it, fall back to Bambu Studio wherever this OS keeps it.
-fn slicer_argv(custom: &str, file: &str, os: &str, probe: SlicerProbe) -> Result<Vec<String>, String> {
-    let words: Vec<String> = custom.split_whitespace().map(|w| w.to_string()).collect();
-    if !words.is_empty() {
-        let mut argv = words;
+/// Build the argv that opens `file` in the slicer chosen by `app_key`. For
+/// "custom", `custom` is the user's command from Settings: split on whitespace,
+/// with the file appended as the last argument (never interpolated into a shell
+/// — there is no shell). For a known slicer, use wherever this OS keeps it.
+fn slicer_argv(app_key: &str, custom: &str, file: &str, os: &str, probe: &SlicerProbe) -> Result<Vec<String>, String> {
+    let Some(app) = slicer_app(app_key) else {
+        let mut argv: Vec<String> = custom.split_whitespace().map(|w| w.to_string()).collect();
+        if argv.is_empty() {
+            return Err("No slicer command set. Enter one in Settings → Libraries → Slicer.".into());
+        }
         argv.push(file.to_string());
         return Ok(argv);
-    }
+    };
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
     match os {
-        "macos" => Ok(s(&["open", "-a", "BambuStudio", file])),
-        "windows" => Ok(s(&["C:\\Program Files\\Bambu Studio\\bambu-studio.exe", file])),
-        _ if probe.flatpak => Ok(s(&["flatpak", "run", "--file-forwarding", "com.bambulab.BambuStudio", "@@", file, "@@"])),
-        _ if probe.on_path => Ok(s(&["bambu-studio", file])),
-        _ => Err("Bambu Studio wasn't found. Set a slicer command in Settings → Libraries.".into()),
+        "macos" => Ok(s(&["open", "-a", app.mac_app, file])),
+        "windows" => Ok(s(&[app.win_path, file])),
+        // A native install beats the Flatpak: it starts faster and sees the file
+        // without portal forwarding.
+        _ if probe.on_path => Ok(s(&[app.bin, file])),
+        _ => match &probe.flatpak {
+            Some(id) => Ok(s(&["flatpak", "run", "--file-forwarding", id, "@@", file, "@@"])),
+            None => Err(format!(
+                "{} wasn't found. Pick another slicer in Settings → Libraries → Slicer.",
+                app.name
+            )),
+        },
     }
 }
 
-fn probe_slicer() -> SlicerProbe {
+fn probe_slicer(app: &SlicerApp) -> SlicerProbe {
     if !cfg!(target_os = "linux") {
         return SlicerProbe::default();
     }
@@ -2056,17 +2105,18 @@ fn probe_slicer() -> SlicerProbe {
             .unwrap_or(false)
     };
     SlicerProbe {
-        flatpak: ok("flatpak", &["info", "com.bambulab.BambuStudio"]),
-        on_path: ok("sh", &["-c", "command -v bambu-studio"]),
+        on_path: ok("sh", &["-c", &format!("command -v {}", app.bin)]),
+        flatpak: app.flatpak_ids.iter().find(|id| ok("flatpak", &["info", id])).map(|id| id.to_string()),
     }
 }
 
-/// Hand one indexed model file to the slicer (Bambu Studio by default). The path
-/// must be a file Trove indexed — this never launches anything on an arbitrary
-/// path from the webview. Trove only starts the slicer; it doesn't touch the file.
+/// Hand one indexed model file to the slicer chosen in Settings (Bambu Studio by
+/// default). The path must be a file Trove indexed — this never launches anything
+/// on an arbitrary path from the webview. Trove only starts the slicer; it
+/// doesn't touch the file.
 #[tauri::command]
 pub fn open_in_slicer(db: State<Db>, path: String) -> Result<(), String> {
-    let custom = {
+    let (app_key, custom) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
         let known: bool = conn
             .query_row("SELECT 1 FROM files WHERE path=?1 LIMIT 1", params![path], |_| Ok(true))
@@ -2076,16 +2126,19 @@ pub fn open_in_slicer(db: State<Db>, path: String) -> Result<(), String> {
         if !known {
             return Err("That file isn't in the index.".into());
         }
-        conn.query_row("SELECT value FROM settings WHERE key=?1", params![SLICER_SETTING], |r| r.get::<_, String>(0))
-            .optional()
-            .map_err(|e| e.to_string())?
-            .unwrap_or_default()
+        let setting = |key: &str| -> Result<String, String> {
+            conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get::<_, String>(0))
+                .optional()
+                .map(|v| v.unwrap_or_default())
+                .map_err(|e| e.to_string())
+        };
+        (setting(SLICER_APP_SETTING)?, setting(SLICER_SETTING)?)
     }; // DB lock released before probing/spawning.
     if !Path::new(&path).is_file() {
         return Err("That file is no longer on disk.".into());
     }
-    let probe = if custom.trim().is_empty() { probe_slicer() } else { SlicerProbe::default() };
-    let argv = slicer_argv(&custom, &path, std::env::consts::OS, probe)?;
+    let probe = slicer_app(&app_key).map(probe_slicer).unwrap_or_default();
+    let argv = slicer_argv(&app_key, &custom, &path, std::env::consts::OS, &probe)?;
     std::process::Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(std::process::Stdio::null())
@@ -2938,27 +2991,45 @@ mod tests {
     fn slicer_argv_resolution() {
         let none = SlicerProbe::default();
         let f = "/models/My Fox/fox v2.3mf";
+        let fp = |id: &str, on_path: bool| SlicerProbe { flatpak: Some(id.to_string()), on_path };
 
-        // A custom command wins everywhere; the file is ONE trailing argument even
-        // with spaces in it (no shell, so nothing to quote or inject).
+        // Custom: the command is split on whitespace and the file is ONE trailing
+        // argument even with spaces in it (no shell, so nothing to quote or inject).
         assert_eq!(
-            slicer_argv("  orca-slicer   --single-instance ", f, "linux", none).unwrap(),
-            vec!["orca-slicer", "--single-instance", f]
+            slicer_argv("custom", "  prusa-slicer   --single-instance ", f, "linux", &none).unwrap(),
+            vec!["prusa-slicer", "--single-instance", f]
         );
+        assert!(slicer_argv("custom", "   ", f, "linux", &none).unwrap_err().contains("Settings"));
 
-        // Linux auto-detect: Flatpak first, then PATH, else a clear error.
-        let flatpak = SlicerProbe { flatpak: true, on_path: true };
+        // Bambu Studio is the default for an unset/unknown setting. Linux: a native
+        // install first, then the Flatpak, else a clear error.
+        assert_eq!(slicer_argv("", "", f, "linux", &fp("com.bambulab.BambuStudio", true)).unwrap(), vec!["bambu-studio", f]);
         assert_eq!(
-            slicer_argv("", f, "linux", flatpak).unwrap(),
+            slicer_argv("bambu", "", f, "linux", &fp("com.bambulab.BambuStudio", false)).unwrap(),
             vec!["flatpak", "run", "--file-forwarding", "com.bambulab.BambuStudio", "@@", f, "@@"]
         );
-        let path_only = SlicerProbe { flatpak: false, on_path: true };
-        assert_eq!(slicer_argv("", f, "linux", path_only).unwrap(), vec!["bambu-studio", f]);
-        assert!(slicer_argv("", f, "linux", none).unwrap_err().contains("Settings"));
+        assert!(slicer_argv("bambu", "", f, "linux", &none).unwrap_err().contains("Bambu Studio"));
+        // A leftover custom command is ignored unless "custom" is selected.
+        assert_eq!(
+            slicer_argv("bambu", "prusa-slicer", f, "linux", &SlicerProbe { flatpak: None, on_path: true }).unwrap(),
+            vec!["bambu-studio", f]
+        );
+
+        // OrcaSlicer: same resolution, its own names — and whichever Flatpak id is installed.
+        assert_eq!(
+            slicer_argv("orca", "", f, "linux", &SlicerProbe { flatpak: None, on_path: true }).unwrap(),
+            vec!["orca-slicer", f]
+        );
+        assert_eq!(
+            slicer_argv("orca", "", f, "linux", &fp("com.orcaslicer.OrcaSlicer", false)).unwrap()[3],
+            "com.orcaslicer.OrcaSlicer"
+        );
+        assert!(slicer_argv("orca", "", f, "linux", &none).unwrap_err().contains("OrcaSlicer"));
 
         // macOS / Windows don't depend on the probe.
-        assert_eq!(slicer_argv("", f, "macos", none).unwrap(), vec!["open", "-a", "BambuStudio", f]);
-        assert_eq!(slicer_argv("", f, "windows", none).unwrap().len(), 2);
+        assert_eq!(slicer_argv("bambu", "", f, "macos", &none).unwrap(), vec!["open", "-a", "BambuStudio", f]);
+        assert_eq!(slicer_argv("orca", "", f, "macos", &none).unwrap(), vec!["open", "-a", "OrcaSlicer", f]);
+        assert!(slicer_argv("orca", "", f, "windows", &none).unwrap()[0].ends_with("orca-slicer.exe"));
     }
 
     #[test]

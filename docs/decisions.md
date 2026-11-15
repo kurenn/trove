@@ -51,9 +51,11 @@ prompt for existing libraries).
 **Decision:** two additions. (1) A model's print status (`queued` / `printed`, no row =
 none) is stored in a `print_status` table keyed by model id — not a column on `models`.
 (2) `open_in_slicer` starts the slicer as a child process with the file as its last
-argument: Bambu Studio by default (Flatpak, then `bambu-studio` on PATH, `open -a` on
-macOS, the default install path on Windows), or the `slicer_command` setting when set.
-The command only accepts a path that is in the `files` table.
+argument. The `slicer_app` setting picks it: Bambu Studio (default), OrcaSlicer, or
+`custom`, which runs the `slicer_command` setting. A known slicer is resolved per
+platform — on Linux a native binary on PATH first, then its Flatpak; `open -a` on macOS;
+the default install path on Windows. The command only accepts a path that is in the
+`files` table.
 **Because:** (1) a rescan deletes and re-inserts `models` rows, so a column would be wiped
 by every rescan; a separate non-cascading table survives it the same way
 `collection_members` does. (2) "open with the OS default app" (the opener plugin) hands a
@@ -65,11 +67,11 @@ scope model is per-path, not per-program, and it doesn't cover Flatpak. Running 
 custom command through a shell — would make spaces and quotes in file names an injection
 surface; the command is split on whitespace and the path is one argv entry instead, which
 means a program path containing spaces can't be expressed (acceptable: wrap it in a script).
-**Unsure about:** the Windows default path and the macOS app name are untested (no such
-machine at hand). Whether status should be per file/part rather than per model. Whether
+**Unsure about:** the Windows default paths and the macOS app names are untested (no such
+machine at hand), as is OrcaSlicer's Flatpak id — two candidates are probed. Whether status should be per file/part rather than per model. Whether
 favorites — still in-memory only — should move into the same kind of table.
 **Affects:** `db.rs` (schema), `index.rs` (`set_print_status`, `open_in_slicer`,
-`slicer_argv`), `Model.printStatus`, the Print status facet, Settings → Libraries → Slicer.
+`slicer_argv`, `slicer_app`), `Model.printStatus`, the Print status facet, Settings → Libraries → Slicer.
 This does not weaken *Read-only, forever*: Trove still never writes to a model file; it
 starts another program that the user asked for.
 

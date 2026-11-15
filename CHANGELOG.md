@@ -6,7 +6,7 @@ The section for each version becomes that version's GitHub release notes.
 ## [Unreleased]
 ### Added
 - **Print status.** Mark a model as *To print* or *Printed* on its detail page. The status shows as a badge on cards and list rows, can be filtered in the sidebar, and survives rescans.
-- **Open in Bambu Studio.** A button on the detail page hands the selected part — or the model's 3MF project — straight to Bambu Studio (Flatpak or native). Another slicer can be set under Settings → Libraries → Slicer.
+- **Open in your slicer.** A button on the detail page hands the selected part — or the model's 3MF project — straight to Bambu Studio or OrcaSlicer (native or Flatpak). Choose which under Settings → Libraries → Slicer, or enter a custom command for any other slicer.
 
 ### Fixed
 - **A prints folder with loose files at the top is no longer one giant model.** If the folder you mount has model files lying directly in it next to your project folders, each loose file is now its own model and the folders are indexed as before. Reindex once to pick this up.

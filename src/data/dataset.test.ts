@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf } from "./dataset";
+import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName } from "./dataset";
 import { useApp } from "../lib/store";
 import { DEFAULT_FILTERS, type Filters, type Model, type GeometryKey, type Library } from "./types";
 
@@ -295,5 +295,20 @@ describe("slicerFile", () => {
     // Mock/unhydrated files carry no path — there is nothing to hand over.
     expect(slicerFile(model({ files: [file("a.stl", false)] }))).toBeUndefined();
     expect(slicerFile(model(), file("a.stl", false))).toBeUndefined();
+  });
+});
+
+describe("slicer choice", () => {
+  it("falls back to Bambu Studio for an unset or unknown setting", () => {
+    expect(slicerId(null)).toBe("bambu");
+    expect(slicerId("")).toBe("bambu");
+    expect(slicerId("cura")).toBe("bambu");
+    expect(slicerId("orca")).toBe("orca");
+    expect(slicerId("custom")).toBe("custom");
+  });
+  it("names the button after the app, or generically for a custom command", () => {
+    expect(slicerButtonName("bambu")).toBe("Bambu Studio");
+    expect(slicerButtonName("orca")).toBe("OrcaSlicer");
+    expect(slicerButtonName("custom")).toBe("slicer");
   });
 });

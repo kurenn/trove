@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Icon, Avatar, Tag } from "../components/Icons";
 import { Thumb, Viewer3D, type ViewerMode } from "../three/Viewer";
 import { MiniCard } from "../components/cards";
-import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES } from "../data/dataset";
+import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, type SlicerId } from "../data/dataset";
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
 import { isTauri, api, revealInManager, copyText } from "../lib/tauri";
@@ -27,12 +27,12 @@ export function DetailScreen({ model }: { model: Model }) {
   const toast = useApp((s) => s.toast);
   const setPrintStatus = useApp((s) => s.setPrintStatus);
   useDataset(); // re-render if the dataset swaps
-  // A custom slicer command (Settings → Libraries) relabels the button; without
-  // one the backend opens Bambu Studio, so the button says so.
-  const [customSlicer, setCustomSlicer] = useState(false);
+  // Which slicer the button starts (Settings → Libraries → Slicer) — it names
+  // the button; the backend reads the same setting when it launches.
+  const [slicer, setSlicer] = useState<SlicerId>("bambu");
   useEffect(() => {
     if (!isTauri) return;
-    api.getSetting("slicer_command").then((v) => setCustomSlicer(!!v?.trim())).catch(() => {});
+    api.getSetting("slicer_app").then((v) => setSlicer(slicerId(v))).catch(() => {});
   }, []);
 
   // The grid ships slim models; pull the on-demand-hydrated full record (files,
@@ -110,7 +110,7 @@ export function DetailScreen({ model }: { model: Model }) {
   // What the slicer gets: the selected part if it's sliceable, else the model's
   // best sliceable file (a 3MF project before a bare mesh).
   const toSlice = slicerFile(m, partFile);
-  const slicerName = customSlicer ? "slicer" : "Bambu Studio";
+  const slicerName = slicerButtonName(slicer);
   const openInSlicer = async () => {
     if (!toSlice?.path) return;
     if (!isTauri) { toast(`Opening in ${slicerName}…`); return; }
