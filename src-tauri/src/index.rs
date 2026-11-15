@@ -745,7 +745,7 @@ const WALK_THREADS: usize = 16;
 /// `GENERIC_SEGMENTS`/`is_generic_segment`; v4 = `GENERIC_SEGMENTS` widened to
 /// cover the support-state/slicer/process buckets common in miniature
 /// releases, e.g. `Presupported`/`Chitubox`/`FDM`).
-const SCAN_VERSION: i64 = 6;
+const SCAN_VERSION: i64 = 7;
 
 /// A message from a walker thread to the DB writer.
 /// (Retained for the `bench_walk` benchmark; the live scan uses `collect_tree`.)
@@ -1360,7 +1360,8 @@ fn generate_image_thumbs(app: &tauri::AppHandle, lib_id: &str, cancel: &Arc<Atom
     for (id, path, ty) in rows {
         let e = by_model.entry(id).or_insert((None, None));
         if ty == "3mf" {
-            if e.0.is_none() { e.0 = Some(path); }
+            // The NEWEST version's project is the model's face (stand_v4 over stand).
+            if e.0.as_deref().is_none_or(|cur| newer_file(&path, cur)) { e.0 = Some(path); }
         } else if e.1.is_none() {
             e.1 = Some(path);
         }
@@ -1463,7 +1464,8 @@ fn stl_thumb_candidates(conn: &Connection, lib_id: &str) -> Vec<(String, String)
     let mut by_model: BTreeMap<String, (String, i64)> = BTreeMap::new();
     for (id, path, size) in rows {
         match by_model.get_mut(&id) {
-            Some(e) if size < e.1 => *e = (path, size),
+            // Newest version first; among equals, the smallest mesh (cheapest to render).
+            Some(e) if newer_file(&path, &e.0) || (!newer_file(&e.0, &path) && size < e.1) => *e = (path, size),
             Some(_) => {}
             None => {
                 by_model.insert(id, (path, size));
@@ -1664,19 +1666,30 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
     }
     // The part count must agree with the detail view, which merges one part's
     // formats (see part_key): count distinct parts, not part files.
+    // The same pass spots duplicates: a part that has a "(n)" copy of a file.
+    let mut dup_models: HashSet<String> = HashSet::new();
     {
-        let mut keys: HashMap<String, HashSet<String>> = HashMap::new();
+        // model → part key → (distinct file stems, any of them a copy?)
+        let mut keys: HashMap<String, HashMap<String, (HashSet<String>, bool)>> = HashMap::new();
         let mut pstmt = conn.prepare("SELECT model_id, path FROM files WHERE is_part")?;
         let prows = pstmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         for (mid, path) in prows.flatten() {
-            keys.entry(mid).or_default().insert(part_key(&path));
+            let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+            let e = keys.entry(mid).or_default().entry(part_key(&path)).or_default();
+            e.1 |= is_copy(&path);
+            e.0.insert(stem);
         }
-        for (mid, set) in keys {
+        for (mid, parts) in keys {
+            // A copy only counts as a duplicate next to the file it copies.
+            if parts.values().any(|(stems, has_copy)| *has_copy && stems.len() > 1) {
+                dup_models.insert(mid.clone());
+            }
             if let Some(entry) = agg.get_mut(&mid) {
-                entry.1 = set.len() as u32;
+                entry.1 = parts.len() as u32;
             }
         }
     }
+    let name_overrides = model_name_overrides(conn);
 
     // Batched tags for all models in one query.
     let mut tagmap: HashMap<String, Vec<String>> = HashMap::new();
@@ -1728,6 +1741,9 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
         let print_status = statusmap.remove(&id).unwrap_or_default();
         let (file_model, split_parent) = shelf_facts(&id, &folder, &split);
         let belongs_to = belongs_to(file_model, &name, &folder, &homes);
+        let duplicates = dup_models.contains(&id);
+        // A user rename wins for display; `belongs_to` above used the real name.
+        let name = name_overrides.get(&id).cloned().unwrap_or(name);
 
         models.push(Model {
             id, name, creator, collection, geometry, color, tags,
@@ -1746,7 +1762,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             thumb,   // raw cache path; frontend resolves to an asset URL
             preview, // raw folder-image path; frontend resolves to an asset URL
             dim_w, dim_d, dim_h,
-            file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to,
+            file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to, duplicates,
         });
     }
 
@@ -1885,29 +1901,92 @@ pub fn get_dataset(db: State<Db>) -> Result<Dataset, String> {
     build_dataset(&conn).map_err(|e| e.to_string())
 }
 
-/// Split a file stem that ends in a version marker into (base, number, suffix):
-/// `stand_v4` → ("stand", 4, ""), `Motor-V11h` → ("Motor", 11, "h"). The marker
-/// needs a separator before it (so `motorv8` is not a version) and a non-empty
-/// base. None when the stem carries no version.
-fn version_split(stem: &str) -> Option<(String, u32, String)> {
-    let at = stem.rfind(|c| c == 'v' || c == 'V')?;
-    let tail = &stem[at + 1..];
-    let digits = tail.chars().take_while(|c| c.is_ascii_digit()).count();
-    let suffix = &tail[digits..];
-    if digits == 0 || digits > 4 || suffix.len() > 2 || !suffix.chars().all(|c| c.is_ascii_alphabetic()) {
-        return None;
+/// Sort key of a file's version: (version numbers, letter suffix, copy number).
+/// `stand_v6.1b (2)` → ([6, 1], "b", 2). Ordered so that a higher version is
+/// newer, and a later copy of the same version is newer than the first.
+type VerKey = (Vec<u32>, String, u32);
+
+/// Read the version out of a file stem: (base name, sort key, label).
+///   `stand_v4`            → ("stand", ([4], "", 0), "v4")
+///   `Motor-V11h`          → ("Motor", ([11], "h", 0), "v11h")
+///   `Swatch+v6.1(2)`      → ("Swatch", ([6, 1], "", 2), "v6.1 (2)")
+///   `clip (2)`            → ("clip", ([], "", 2), "(2)")   — a copy of `clip`
+///   `clip`                → ("clip", None, "original")
+/// A version marker is `v` + numbers (dotted) + up to two letters, at the very
+/// end, not glued to an ASCII letter or digit (so `motorv8` is not a version). A
+/// copy marker is a trailing `(n)`, as browsers and file managers add to a
+/// second download or duplicate. None = the unmarked original, the oldest.
+fn name_version(stem: &str) -> (String, Option<VerKey>, String) {
+    let is_sep = |c: char| c == '_' || c == '-' || c == ' ' || c == '.' || c == '+';
+
+    // 1) trailing "(n)" → copy number.
+    let mut rest = stem.trim_end();
+    let mut copy = 0u32;
+    if let Some(inner) = rest.strip_suffix(')').and_then(|r| r.rfind('(').map(|at| (at, &r[at + 1..]))) {
+        let (at, digits) = inner;
+        if !digits.is_empty() && digits.len() <= 3 && digits.chars().all(|c| c.is_ascii_digit()) {
+            let head = rest[..at].trim_end_matches(is_sep);
+            if !head.is_empty() {
+                copy = digits.parse().unwrap_or(0);
+                rest = head;
+            }
+        }
     }
-    let head = &stem[..at];
-    let base = head.trim_end_matches(|c| c == '_' || c == '-' || c == ' ' || c == '.');
-    if base.is_empty() || base.len() == head.len() {
-        return None; // no base, or no separator before the marker
+
+    // 2) trailing "v<n>[.<n>…][letters]" → version.
+    let version = (|| {
+        let at = rest.rfind(|c| c == 'v' || c == 'V')?;
+        if rest[..at].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric()) {
+            return None; // glued to a word: "motorv8"
+        }
+        let base = rest[..at].trim_end_matches(is_sep);
+        if base.is_empty() {
+            return None;
+        }
+        let tail = &rest[at + 1..];
+        let num_len = tail.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(tail.len());
+        let (nums_str, suffix) = tail.split_at(num_len);
+        let nums: Vec<u32> = nums_str.split('.').map(|n| n.parse::<u32>().ok()).collect::<Option<Vec<u32>>>()?;
+        if nums_str.len() > 12 || suffix.len() > 2 || !suffix.chars().all(|c| c.is_ascii_alphabetic()) {
+            return None;
+        }
+        Some((base.to_string(), nums, nums_str.to_string(), suffix.to_lowercase()))
+    })();
+
+    match version {
+        Some((base, nums, shown, suffix)) => {
+            let label = if copy > 0 { format!("v{shown}{suffix} ({copy})") } else { format!("v{shown}{suffix}") };
+            (base, Some((nums, suffix, copy)), label)
+        }
+        None if copy > 0 => (rest.to_string(), Some((Vec::new(), String::new(), copy)), format!("({copy})")),
+        None => (stem.to_string(), None, "original".to_string()),
     }
-    Some((base.to_string(), tail[..digits].parse().ok()?, suffix.to_lowercase()))
 }
 
-/// A stem without its version marker (`stand_v4` → `stand`); unchanged when it has none.
+/// A stem without its version/copy marker (`stand_v4` → `stand`); unchanged when it has none.
 fn version_base(stem: &str) -> String {
-    version_split(stem).map(|(base, _, _)| base).unwrap_or_else(|| stem.to_string())
+    name_version(stem).0
+}
+
+/// True when file `a` is a newer version than file `b`, going by their names.
+fn newer_file(a: &str, b: &str) -> bool {
+    let key = |p: &str| name_version(Path::new(p).file_stem().and_then(|s| s.to_str()).unwrap_or("")).1;
+    key(a) > key(b)
+}
+
+/// True when a file's name carries a "(n)" copy marker.
+fn is_copy(path: &str) -> bool {
+    let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    name_version(stem).1.is_some_and(|(_, _, copy)| copy > 0)
+}
+
+/// User-given display names for models (kind 'model' in `name_overrides`), by id.
+fn model_name_overrides(conn: &Connection) -> HashMap<String, String> {
+    conn.prepare("SELECT id, name FROM name_overrides WHERE kind='model'")
+        .and_then(|mut st| {
+            st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map(|rows| rows.flatten().collect())
+        })
+        .unwrap_or_default()
 }
 
 /// Identity of a part within a model: its folder + file stem (minus any version
@@ -1921,20 +2000,13 @@ fn part_key(path: &str) -> String {
 }
 
 /// Turn a part's files into versions when their names carry at least two
-/// different version markers (a file without one counts as "original", the
+/// different version/copy markers (a file without one counts as "original", the
 /// oldest). The part is then named after the shared base and `files` becomes the
 /// newest version's; otherwise the part is left exactly as it is.
 fn apply_versions(part: &mut Part) {
-    // (sort key, label) per file; None = the unversioned original.
-    let ver = |f: &ModelFile| -> (Option<(u32, String)>, String) {
-        match version_split(&stem_of(&f.name)) {
-            Some((_, n, suf)) => (Some((n, suf.clone())), format!("v{n}{suf}")),
-            None => (None, "original".to_string()),
-        }
-    };
-    let mut groups: BTreeMap<Option<(u32, String)>, PartVersion> = BTreeMap::new();
+    let mut groups: BTreeMap<Option<VerKey>, PartVersion> = BTreeMap::new();
     for f in &part.files {
-        let (key, label) = ver(f);
+        let (_, key, label) = name_version(&stem_of(&f.name));
         groups.entry(key).or_insert_with(|| PartVersion { label, files: Vec::new() }).files.push(f.clone());
     }
     if groups.len() < 2 {
@@ -2044,6 +2116,9 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
     let print_status = print_status_of(conn, &id);
     let (file_model, split_parent) = shelf_facts(&id, &folder, &load_split_dirs(conn));
     let belongs_to = belongs_to(file_model, &name, &folder, &folder_homes(conn));
+    let duplicates = files.iter().any(|f| f.path.as_deref().is_some_and(is_copy))
+        && parts.iter().any(|p| p.versions.iter().any(|v| v.label.ends_with(')')));
+    let name = model_name_overrides(conn).remove(&id).unwrap_or(name);
 
     Ok(Some(Model {
         id, name, creator, collection, geometry, color, tags, files,
@@ -2051,7 +2126,7 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
         parts, extras,
         print_time: None, filament: None, makes: None, volume: None,
         file_count, total_size, thumb, preview, dim_w, dim_d, dim_h,
-        file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to,
+        file_types, parts_count, real: true, print_status, file_model, split_parent, belongs_to, duplicates,
     }))
 }
 
@@ -2071,6 +2146,23 @@ pub fn rename_creator(db: State<Db>, id: String, name: String) -> Result<Dataset
     }
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     set_name_override(&conn, "creator", &id, trimmed).map_err(|e| e.to_string())?;
+    build_dataset(&conn).map_err(|e| e.to_string())
+}
+
+/// Give a model a display name of the user's choosing (index only — the files
+/// and folders keep their names). An empty name removes the override, bringing
+/// back the name derived from the folder/file. Survives rescans; searchable.
+#[tauri::command]
+pub fn rename_model(db: State<Db>, id: String, name: String) -> Result<Dataset, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        conn.execute("DELETE FROM name_overrides WHERE kind='model' AND id=?1", params![id])
+            .map_err(|e| e.to_string())?;
+    } else {
+        set_name_override(&conn, "model", &id, trimmed).map_err(|e| e.to_string())?;
+    }
+    let _ = rebuild_fts(&conn); // so search finds the model by its new name
     build_dataset(&conn).map_err(|e| e.to_string())
 }
 
@@ -2916,6 +3008,7 @@ fn rebuild_fts(conn: &Connection) -> rusqlite::Result<()> {
         "INSERT INTO search_fts (kind, ref_id, text)
          SELECT 'folder', m.id,
                 m.name || ' ' ||
+                COALESCE((SELECT o.name FROM name_overrides o WHERE o.kind='model' AND o.id=m.id) || ' ', '') ||
                 REPLACE(REPLACE(REPLACE(
                     CASE WHEN SUBSTR(m.folder, 1, LENGTH(l.path)) = l.path
                          THEN SUBSTR(m.folder, LENGTH(l.path) + 1)
@@ -3731,13 +3824,27 @@ mod tests {
 
     #[test]
     fn version_markers_are_recognised() {
-        let v = |s: &str| version_split(s).map(|(b, n, suf)| (b, n, suf));
-        assert_eq!(v("stand_v4"), Some(("stand".into(), 4, "".into())));
-        assert_eq!(v("Motor-V11h"), Some(("Motor".into(), 11, "h".into())));
-        assert_eq!(v("Garmin265 Staender v2"), Some(("Garmin265 Staender".into(), 2, "".into())));
-        // Not versions: no separator, no base, no number, or too much after the number.
-        for s in ["motorv8", "v2", "_v2", "valve", "stand_v", "stand_v2final", "stand_vase", "plate_12"] {
-            assert_eq!(v(s), None, "{s}");
+        let v = |s: &str| { let (base, key, label) = name_version(s); (base, key.is_some(), label) };
+        assert_eq!(v("stand_v4"), ("stand".into(), true, "v4".into()));
+        assert_eq!(v("Motor-V11h"), ("Motor".into(), true, "v11h".into()));
+        assert_eq!(v("Garmin265 Staender v2"), ("Garmin265 Staender".into(), true, "v2".into()));
+        // Dotted versions, "+" as a separator, and a marker right after non-ASCII text.
+        assert_eq!(v("Filament+Swatch+System+v6.1"), ("Filament+Swatch+System".into(), true, "v6.1".into()));
+        assert_eq!(v("耗材样本卡v3"), ("耗材样本卡".into(), true, "v3".into()));
+        // Copy markers, as a browser or file manager adds them — alone or after a version.
+        assert_eq!(v("clip (2)"), ("clip".into(), true, "(2)".into()));
+        assert_eq!(v("Filament+Swatch+System+v6.1(2)"), ("Filament+Swatch+System".into(), true, "v6.1 (2)".into()));
+        assert_eq!(v("耗材样本卡v3_(1)"), ("耗材样本卡".into(), true, "v3 (1)".into()));
+        assert_eq!(v("stand_v4 (2)"), ("stand".into(), true, "v4 (2)".into()));
+        // Not versions: glued to a word, no base, no number, or too much after the number.
+        for s in ["motorv8", "v2", "_v2", "valve", "stand_v", "stand_v2final", "stand_vase", "plate_12", "stand_v6.", "(2)", "f(x)"] {
+            assert_eq!(v(s), (s.to_string(), false, "original".into()), "{s}");
+        }
+        // Ordering: original < copy of original < v2 < v4 < copy of v4 < v6.1 < v10.
+        let key = |s: &str| name_version(s).1;
+        let order = ["a", "a (2)", "a_v2", "a_v4", "a_v4 (2)", "a_v6.1", "a_v10"];
+        for w in order.windows(2) {
+            assert!(key(w[0]) < key(w[1]), "{} < {}", w[0], w[1]);
         }
         assert_eq!(version_base("stand_v4"), "stand");
         assert_eq!(version_base("stand"), "stand");
@@ -3844,6 +3951,62 @@ mod tests {
         let twins = vec![PathBuf::from("/a/x.stl"), PathBuf::from("/b/x.stl")];
         let plan = plan_moves(&twins, dest, &|_| false);
         assert_eq!((plan[0].1.clone(), plan[1].1.clone()), (dest.join("x.stl"), dest.join("x (2).stl")));
+    }
+
+    #[test]
+    fn copies_are_flagged_and_models_can_be_renamed() {
+        let root = std::env::temp_dir().join(format!("trove_dup_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // A shelf root: a download and its "(2)" copy, plus an unrelated folder model.
+        touch(&root.join("Swatch+System+v6.1.3mf"), 900);
+        touch(&root.join("Swatch+System+v6.1(2).3mf"), 800);
+        touch(&root.join("Motor/housing.stl"), 1500);
+        touch(&root.join("Motor/housing_v2.stl"), 1500);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        assert_eq!(ds.models.len(), 2, "{:?}", ds.models.iter().map(|m| &m.name).collect::<Vec<_>>());
+        let swatch = ds.models.iter().find(|m| m.file_model).unwrap();
+        assert_eq!(swatch.file_count, 2, "the copy joins the model it is a copy of");
+        assert!(swatch.duplicates);
+        let motor = ds.models.iter().find(|m| m.name == "Motor").unwrap();
+        assert!(!motor.duplicates, "versions are not duplicates");
+
+        // Detail: one part, the copy listed as the newest "version".
+        let full = build_model_full(&conn, &swatch.id).unwrap().unwrap();
+        assert!(full.duplicates);
+        let labels: Vec<&str> = full.parts[0].versions.iter().map(|v| v.label.as_str()).collect();
+        assert_eq!(labels, vec!["v6.1 (2)", "v6.1"]);
+
+        // Rename: display name only, survives a rescan, searchable, and reversible.
+        let id = swatch.id.clone();
+        let original = swatch.name.clone();
+        set_name_override(&conn, "model", &id, "Filament Swatches").unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        rebuild_fts(&conn).unwrap();
+        let ds = build_dataset(&conn).unwrap();
+        assert_eq!(ds.models.iter().find(|m| m.id == id).unwrap().name, "Filament Swatches");
+        assert_eq!(build_model_full(&conn, &id).unwrap().unwrap().name, "Filament Swatches");
+        assert!(search_model_ids_ranked(&conn, "swatches").unwrap().contains(&id), "found by the new name");
+        conn.execute("DELETE FROM name_overrides WHERE kind='model' AND id=?1", params![id]).unwrap();
+        assert_eq!(build_dataset(&conn).unwrap().models.iter().find(|m| m.id == id).unwrap().name, original);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_newest_version_is_the_models_face() {
+        assert!(newer_file("/a/stand_v4.3mf", "/a/stand.3mf"));
+        assert!(newer_file("/a/stand_v4 (2).3mf", "/a/stand_v4.3mf"));
+        assert!(newer_file("/a/stand_v10.3mf", "/a/stand_v4.3mf"));
+        assert!(!newer_file("/a/stand.3mf", "/a/stand_v2.3mf"));
+        assert!(!newer_file("/a/x.3mf", "/a/y.3mf"), "unversioned files don't outrank each other");
     }
 
     #[test]

@@ -136,6 +136,10 @@ pub struct Model {
     /// name — where this file most likely belongs (the UI offers to move it there).
     #[serde(rename = "belongsTo", default, skip_serializing_if = "Option::is_none")]
     pub belongs_to: Option<String>,
+    /// True when the model holds a copy of one of its own files — the same name
+    /// with a "(2)"-style marker, as a second download or a duplicate gets.
+    #[serde(default)]
+    pub duplicates: bool,
     /** Cached thumbnail (asset path) once rendered. */
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumb: Option<String>,

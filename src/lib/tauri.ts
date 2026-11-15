@@ -22,6 +22,8 @@ export const api = {
   getModel: (id: string) => invoke<Model | null>("get_model", { id }),
   /** Rename a creator (persisted; survives rescans). Returns the rebuilt dataset. */
   renameCreator: (id: string, name: string) => invoke<Dataset>("rename_creator", { id, name }),
+  /** Give a model a display name (index only; "" restores the derived name). */
+  renameModel: (id: string, name: string) => invoke<Dataset>("rename_model", { id, name }),
   /** Create a user collection. Returns [newId, dataset]. */
   createCollection: (name: string) => invoke<[string, Dataset]>("create_collection", { name }),
   renameCollection: (id: string, name: string) => invoke<Dataset>("rename_collection", { id, name }),

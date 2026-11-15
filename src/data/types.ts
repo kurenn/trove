@@ -129,6 +129,8 @@ export interface Model {
   /** For a loose-file model: the same-named folder next to it, where it most
       likely belongs (offer to move it there). */
   belongsTo?: string;
+  /** True when the model holds a "(2)"-style copy of one of its own files. */
+  duplicates?: boolean;
 }
 
 /* ── Quick Find launcher results (from the Rust quick_search command) ── */

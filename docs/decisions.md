@@ -22,6 +22,44 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
+## 2026-11-15 — Copies and dotted versions join the version logic; renames are index-only
+
+**Decision:** (1) `name_version` replaces the first version parser: a trailing `(n)` is a
+copy marker (a second download, a file-manager duplicate), versions may be dotted
+(`v6.1`), `+` counts as a separator, and the marker may follow non-ASCII text directly
+(`耗材样本卡v3`). A copy sorts right after the file it copies, so it folds into the same
+part/model as its newest "version", and a model holding one is flagged `duplicates`.
+(2) The model's thumbnail comes from its NEWEST version's file. (3) A model can be
+renamed: an override in `name_overrides` (kind `model`), applied when the dataset is
+built and included in the search index; an empty name restores the derived one.
+(4) STEP-only models get a thumbnail rendered in the webview (OCCT WASM), one small
+file at a time. `SCAN_VERSION` 6 → 7.
+**Because:** two downloads of one thing showed up as two models; a model named after a
+download's file name can't be fixed without renaming the file; a design that moved on
+kept showing its first version; STEP exports stayed blank tiles.
+**Rejected:** comparing file contents to call something a duplicate — it means hashing
+every file on every scan, and the two "duplicates" that prompted this differ in content
+anyway (re-downloaded, re-saved). Renaming the file on disk — *Read-only*. Rendering
+STEP in Rust — no pure-Rust STEP tessellator worth depending on.
+**Unsure about:** `name (2)` that is NOT a copy but a legitimately numbered thing
+("Plate (2)") is merged as one — the version chips still show both. The STEP render
+parses on the main thread; the 3 MB cap and the pause are guesses at "small enough".
+**Affects:** `name_version` / `is_copy` / `newer_file`, thumbnail passes in
+`generate_image_thumbs`, `rename_model`, `rebuild_fts`, `Model.duplicates`,
+`thumbs.ts` (`needsStepThumb`), the title editor on Detail.
+
+## 2026-11-15 — Linux webview: no per-card backdrop blur
+
+**Decision:** on Linux the root element gets `no-backdrop-blur`, and cards drop
+`backdrop-filter` on the heart button and badges for a more opaque fill; smooth
+scrolling is off there too.
+**Because:** scrolling the grid stuttered on WebKitGTK, which blurs in software — one
+layer per badge per card. This is a likely cause, not a measured one.
+**Rejected:** removing the blur everywhere — it is fine on macOS/Windows webviews.
+**Unsure about:** whether this was the whole problem; a dev build (unminified React,
+unoptimized Rust) is slow in its own right, so judge it in a release build.
+**Affects:** `main.tsx`, `app.css`.
+
 ## 2026-11-15 — One exception to read-only: moving a loose file into its folder, on request
 
 **Decision:** a loose-file model with a same-named folder model right next to it

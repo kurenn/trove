@@ -79,6 +79,9 @@ interface AppState {
   addToCollection: (collectionId: string, modelId: string) => Promise<void>;
   removeFromCollection: (collectionId: string, modelId: string) => Promise<void>;
   deleteCollection: (id: string) => Promise<void>;
+  /** Give a model a display name of the user's choosing ("" restores the derived
+      one). Index only — files and folders keep their names. */
+  renameModel: (id: string, name: string) => Promise<void>;
   /** Set a model's print status ("" clears it); persisted under Tauri. */
   setPrintStatus: (modelId: string, status: PrintStatus) => Promise<void>;
 
@@ -355,6 +358,25 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
+  renameModel: async (id, name) => {
+    if (isTauri) {
+      const raw = await api.renameModel(id, name);
+      const { data, seeded } = await resolveAssets(raw, get().thumbs);
+      // The hydrated detail record carries the name too — take it from the rebuilt row.
+      const fresh = data.MODELS.find((m) => m.id === id)?.name;
+      set((s) => ({
+        data, thumbs: seeded,
+        ...(s.details[id] && fresh ? { details: { ...s.details, [id]: { ...s.details[id], name: fresh } } } : {}),
+      }));
+    } else {
+      const nm = name.trim();
+      if (!nm) return; // mock data has no derived name to fall back to
+      set((s) => ({
+        data: { ...s.data, MODELS: s.data.MODELS.map((m) => (m.id === id ? { ...m, name: nm } : m)) },
+        ...(s.details[id] ? { details: { ...s.details, [id]: { ...s.details[id], name: nm } } } : {}),
+      }));
+    }
+  },
   setPrintStatus: async (modelId, status) => {
     // Patch the hydrated detail record too, so an open detail view updates
     // without a refetch (the dataset rebuild only replaces the slim grid rows).

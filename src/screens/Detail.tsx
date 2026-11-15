@@ -26,6 +26,16 @@ export function DetailScreen({ model }: { model: Model }) {
   const onFav = useApp((s) => s.toggleFav);
   const toast = useApp((s) => s.toast);
   const setPrintStatus = useApp((s) => s.setPrintStatus);
+  // Rename = a display name in the index; the files keep theirs. null = not editing.
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  useEffect(() => { setNameDraft(null); }, [model.id]);
+  const saveName = async () => {
+    const next = (nameDraft ?? "").trim();
+    setNameDraft(null);
+    if (next === m.name) return;
+    try { await useApp.getState().renameModel(m.id, next); toast(next ? "Renamed" : "Name reset"); }
+    catch (e) { toast(String(e)); }
+  };
   useDataset(); // re-render if the dataset swaps
   // Which slicer the button starts (Settings → Libraries → Slicer) — it names
   // the button; the backend reads the same setting when it launches.
@@ -277,7 +287,14 @@ export function DetailScreen({ model }: { model: Model }) {
         </div>
 
         <div>
-          <h1 className="page-title" style={{ fontSize: 26 }}>{m.name}</h1>
+          {nameDraft === null
+            ? <h1 className="page-title title-edit" style={{ fontSize: 26 }}>
+                {m.name}
+                <button className="title-edit-btn" title="Rename (display name only — files keep their names)" onClick={() => setNameDraft(m.name)}><Icon name="edit" size={15} /></button>
+              </h1>
+            : <input className="input title-input" autoFocus value={nameDraft} placeholder="Leave empty to reset the name"
+                     onChange={(e) => setNameDraft(e.target.value)} onBlur={saveName}
+                     onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") setNameDraft(null); }} />}
           {formats.length > 0 &&
             <div className="format-row" title="Formats this model is available in">
               {formats.map((t) => <span key={t} className="format-chip">{t}</span>)}

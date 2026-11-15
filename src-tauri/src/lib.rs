@@ -102,6 +102,7 @@ pub fn run() {
             index::get_dataset,
             index::get_model,
             index::rename_creator,
+            index::rename_model,
             index::create_collection,
             index::rename_collection,
             index::add_to_collection,
