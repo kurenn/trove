@@ -104,6 +104,11 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             model_id TEXT PRIMARY KEY, status TEXT NOT NULL, updated TEXT NOT NULL DEFAULT ''
         );
 
+        -- Folders the user chose to split: indexed as a shelf (each loose model
+        -- file its own model, each subfolder grouped on its own) instead of as
+        -- one model. Absolute directory paths; consulted by every scan.
+        CREATE TABLE IF NOT EXISTS split_dirs (path TEXT PRIMARY KEY);
+
         CREATE INDEX IF NOT EXISTS idx_models_library ON models(library_id);
         CREATE INDEX IF NOT EXISTS idx_files_model    ON files(model_id);
         CREATE INDEX IF NOT EXISTS idx_tags_model     ON tags(model_id);

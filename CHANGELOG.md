@@ -7,6 +7,7 @@ The section for each version becomes that version's GitHub release notes.
 ### Added
 - **Print status.** Mark a model as *To print* or *Printed* on its detail page. The status shows as a badge on cards and list rows, can be filtered in the sidebar, and survives rescans.
 - **Open in your slicer.** A button on the detail page hands the selected part — or the model's 3MF project — straight to Bambu Studio or OrcaSlicer (native or Flatpak). Choose which under Settings → Libraries → Slicer, or enter a custom command for any other slicer.
+- **Split a category folder into its models.** A folder that is really a category — loose files that are separate things, plus project folders — can be split from its detail page: each loose file becomes its own model, each subfolder stays one. *Regroup* puts it back. Only the index changes; nothing moves on disk.
 
 ### Fixed
 - **A prints folder with loose files at the top is no longer one giant model.** If the folder you mount has model files lying directly in it next to your project folders, each loose file is now its own model and the folders are indexed as before. Reindex once to pick this up.

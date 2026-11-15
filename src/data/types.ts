@@ -101,6 +101,10 @@ export interface Model {
   real?: boolean;
   /** User-set print status ("queued" = to print, "printed"); absent/"" = none. */
   printStatus?: PrintStatus;
+  /** True when the model is one loose file on a shelf, not a folder of its own. */
+  fileModel?: boolean;
+  /** The folder this model was split out of by the user, if any (offer to regroup). */
+  splitParent?: string;
 }
 
 /* ── Quick Find launcher results (from the Rust quick_search command) ── */

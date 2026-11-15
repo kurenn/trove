@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName } from "./dataset";
+import { applyFilters, isReal, partCount, fileCount, librariesNeedingReindex, slicerFile, printStatusOf, slicerId, slicerButtonName, canSplit, folderName } from "./dataset";
 import { useApp } from "../lib/store";
 import { DEFAULT_FILTERS, type Filters, type Model, type GeometryKey, type Library } from "./types";
 
@@ -310,5 +310,19 @@ describe("slicer choice", () => {
     expect(slicerButtonName("bambu")).toBe("Bambu Studio");
     expect(slicerButtonName("orca")).toBe("OrcaSlicer");
     expect(slicerButtonName("custom")).toBe("slicer");
+  });
+});
+
+describe("folder grouping helpers", () => {
+  it("offers a split only for real folder models with more than one file", () => {
+    expect(canSplit(model({ real: true, fileCount: 12 }))).toBe(true);
+    expect(canSplit(model({ real: true, fileCount: 1 }))).toBe(false); // nothing to split
+    expect(canSplit(model({ real: true, fileCount: 2, fileModel: true }))).toBe(false); // one file + its image
+    expect(canSplit(model({ fileCount: 12 }))).toBe(false); // mock/demo data
+  });
+  it("names a folder by its last path segment", () => {
+    expect(folderName("/home/me/Prints/Mounts")).toBe("Mounts");
+    expect(folderName("/home/me/Prints/Mounts/")).toBe("Mounts");
+    expect(folderName("C:\\Prints\\Mounts")).toBe("Mounts");
   });
 });

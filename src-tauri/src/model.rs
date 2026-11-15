@@ -98,6 +98,14 @@ pub struct Model {
     /// User-set print status: "" (none), "queued" (to print) or "printed".
     #[serde(rename = "printStatus", default)]
     pub print_status: String,
+    /// True when the model is a single loose file (plus same-stem siblings) on a
+    /// shelf — a library root or a split folder — rather than a folder of its own.
+    #[serde(rename = "fileModel", default)]
+    pub file_model: bool,
+    /// The split folder this model came out of, if its parent folder was split by
+    /// the user (lets the UI offer to regroup it).
+    #[serde(rename = "splitParent", default, skip_serializing_if = "Option::is_none")]
+    pub split_parent: Option<String>,
     /** Cached thumbnail (asset path) once rendered. */
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumb: Option<String>,

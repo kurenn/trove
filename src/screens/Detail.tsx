@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import { Icon, Avatar, Tag } from "../components/Icons";
 import { Thumb, Viewer3D, type ViewerMode } from "../three/Viewer";
 import { MiniCard } from "../components/cards";
-import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, type SlicerId } from "../data/dataset";
+import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, type SlicerId } from "../data/dataset";
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
 import { isTauri, api, revealInManager, copyText } from "../lib/tauri";
-import type { Creator, Model, ModelFile, PrintStatus } from "../data/types";
+import type { Creator, Library, Model, ModelFile, PrintStatus } from "../data/types";
 
 const UNKNOWN_CREATOR: Creator = { id: "", name: "Unknown", handle: "", models: 0, blurb: "", tone: "var(--ink-3)" };
 
@@ -117,6 +117,19 @@ export function DetailScreen({ model }: { model: Model }) {
     try { await api.openInSlicer(toSlice.path); toast(`Opening ${toSlice.name} in ${slicerName}…`); }
     catch (e) { toast(String(e)); }
   };
+  // Folder grouping is the user's call below the library root: split a category
+  // folder into its models, or put a split folder back together. Index-only —
+  // nothing moves on disk. Both start a rescan, after which this model's id is
+  // gone (split) or its siblings are (regroup), so leave for the library.
+  const regroup = async (start: () => Promise<Library[]>, msg: string) => {
+    try {
+      useApp.getState().setLibraries(await start());
+      toast(msg);
+      nav({ name: "library" });
+    } catch (e) { toast(String(e)); }
+  };
+  const split = () => regroup(() => api.splitFolder(m.id), `Splitting “${m.name}” into separate models…`);
+  const unsplit = () => m.splitParent && regroup(() => api.unsplitFolder(m.splitParent!), `Regrouping “${folderName(m.splitParent)}”…`);
   const copyPath = async () => {
     try { await copyText(m.folder); toast("Path copied to clipboard"); }
     catch { toast("Path copied to clipboard"); }
@@ -249,6 +262,24 @@ export function DetailScreen({ model }: { model: Model }) {
               )}
             </div>
           </div>
+
+          {isTauri && !hydrating && (canSplit(m) || m.splitParent) &&
+            <div className="panel">
+              <div className="panel-h"><Icon name="folder" size={18} /> Folder grouping</div>
+              {canSplit(m) && <>
+                <p className="muted" style={{ fontSize: 13, margin: "0 0 10px" }}>
+                  Is this folder a category rather than one model? Split it: each loose file becomes its own model and each subfolder stays one. Nothing moves on disk.
+                </p>
+                <button className="btn" style={{ width: "100%" }} onClick={split}><Icon name="grid" size={16} /> Split into separate models</button>
+              </>}
+              {m.splitParent && <>
+                <p className="muted" style={{ fontSize: 13, margin: canSplit(m) ? "14px 0 10px" : "0 0 10px" }}>
+                  Split out of “{folderName(m.splitParent)}”.
+                </p>
+                <button className="btn" style={{ width: "100%" }} onClick={unsplit}><Icon name="layers" size={16} /> Regroup “{folderName(m.splitParent)}” into one model</button>
+              </>}
+            </div>
+          }
 
           <div className="panel">
             <div className="panel-h"><Icon name="layers" size={18} /> Collections</div>

@@ -661,7 +661,7 @@ fn persist_scan(conn: &mut Connection, lib_id: &str, root: &Path) -> rusqlite::R
         Arc::new(move |p, f, m| { d2.lock().unwrap().insert(p, (f, m)); });
     collect_tree(root, Arc::new(AtomicBool::new(false)), 4, on_dir);
     let dirs = dirs.lock().unwrap().clone();
-    let grouped = group_models(root, &dirs);
+    let grouped = group_models(root, &dirs, &load_split_dirs(conn));
 
     let mut models = 0u32;
     let mut files = 0u32;
@@ -941,13 +941,34 @@ fn collect_tree(
     }
 }
 
+/// Folders the user split by hand (see `split_dirs` in db.rs).
+fn load_split_dirs(conn: &Connection) -> HashSet<PathBuf> {
+    conn.prepare("SELECT path FROM split_dirs")
+        .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().map(PathBuf::from).collect()))
+        .unwrap_or_default()
+}
+
+/// How a model relates to shelves, derived from its id + stored folder (no extra
+/// column): a FILE model's id comes from a virtual dir, so it differs from the hash
+/// of its real folder. Returns (is_file_model, the split folder it came out of).
+fn shelf_facts(id: &str, folder: &str, split: &HashSet<PathBuf>) -> (bool, Option<String>) {
+    let file_model = id != format!("m{:x}", fnv1a(folder));
+    let parent: Option<&Path> = if file_model { Some(Path::new(folder)) } else { Path::new(folder).parent() };
+    let split_parent = parent.filter(|p| split.contains(*p)).map(|p| p.to_string_lossy().to_string());
+    (file_model, split_parent)
+}
+
 /// Group collected directories into models. A directory is a **model root** when it
 /// directly holds loose media (a printable OR an image); a directory of only
 /// subfolders is a container (creator/tier/category) whose children are models in
 /// their own right. Every directory's files are attributed to its nearest
 /// ancestor-or-self model root, so a model absorbs its whole subtree (nested STL
 /// folders → parts, any image → preview). Models with no printable are dropped.
-fn group_models(root: &Path, dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>) -> Vec<GroupedModel> {
+fn group_models(
+    root: &Path,
+    dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>,
+    split: &HashSet<PathBuf>,
+) -> Vec<GroupedModel> {
     // A "candidate" directly holds loose media: a model file (printable or .blend)
     // or an image.
     let mut candidates: HashSet<PathBuf> = dirs
@@ -971,8 +992,16 @@ fn group_models(root: &Path, dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>) 
                 .and_then(|c| c.as_os_str().to_str())
                 .is_some_and(|seg| !is_generic_segment(seg))
         });
-    if root_is_shelf {
-        candidates.remove(root);
+    // Shelves: the root (when detected above) plus every folder the user split by
+    // hand (`split_dirs`). Below the root the same situation is ambiguous — loose
+    // files beside subfolders can be a category OR one model — so there it is the
+    // user's call, never a heuristic.
+    let mut shelves: Vec<&Path> = split.iter().filter(|p| p.starts_with(root)).map(|p| p.as_path()).collect();
+    if root_is_shelf && !split.contains(root) {
+        shelves.push(root);
+    }
+    for shelf in &shelves {
+        candidates.remove(*shelf);
     }
     // A model root is the SHALLOWEST candidate in its chain — a candidate with no
     // candidate ancestor. So a model with loose images + nested STL subfolders is
@@ -1022,21 +1051,21 @@ fn group_models(root: &Path, dirs: &BTreeMap<PathBuf, (Vec<ScannedFile>, i64)>) 
         }
     }
 
-    // Shelf root: each loose model file is its own model, together with any
+    // On a shelf, each loose model file is its own model, together with any
     // same-stem siblings (fox.3mf + fox.png). The model gets a VIRTUAL directory
-    // `<root>/<stem>` — it only supplies a stable id and the display name; nothing
-    // is created on disk, and compute_record stores the real folder (the root).
+    // `<shelf>/<stem>` — it only supplies a stable id and the display name; nothing
+    // is created on disk, and compute_record stores the real folder (the shelf).
     // If a real folder already owns that path, the file model steps aside.
-    if root_is_shelf {
-        if let Some((files, mt)) = dirs.get(root) {
+    for shelf in &shelves {
+        if let Some((files, mt)) = dirs.get(*shelf) {
             let mut by_stem: BTreeMap<String, Vec<ScannedFile>> = BTreeMap::new();
             for f in files {
                 by_stem.entry(stem_of(&f.name)).or_default().push(f.clone());
             }
             for (stem, group) in by_stem {
-                let mut vdir = root.join(&stem);
+                let mut vdir = shelf.join(&stem);
                 if dirs.keys().any(|d| d.starts_with(&vdir)) {
-                    vdir = root.join(format!("{stem} (file)"));
+                    vdir = shelf.join(format!("{stem} (file)"));
                 }
                 acc.insert(vdir, (group, *mt));
             }
@@ -1132,7 +1161,8 @@ pub fn do_scan(app: &tauri::AppHandle, lib_id: &str, root: &Path, cancel: Arc<At
     }
 
     // ── Phase 2: group directories into models (a model absorbs its subtree) ──
-    let models = group_models(root, &dirs);
+    let split = db.0.lock().map(|c| load_split_dirs(&c)).unwrap_or_default();
+    let models = group_models(root, &dirs, &split);
 
     // ── Phase 3: incremental upsert (skip models whose subtree is unchanged) ──
     let mut seen: HashSet<String> = HashSet::new();
@@ -1607,6 +1637,8 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
         }
     }
 
+    let split = load_split_dirs(conn);
+
     // Batched user-set print statuses for all models in one query.
     let mut statusmap: HashMap<String, String> = HashMap::new();
     {
@@ -1642,6 +1674,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
         let (file_types, parts_count) = agg.remove(&id).unwrap_or_default();
         let tags = tagmap.remove(&id).unwrap_or_default();
         let print_status = statusmap.remove(&id).unwrap_or_default();
+        let (file_model, split_parent) = shelf_facts(&id, &folder, &split);
 
         models.push(Model {
             id, name, creator, collection, geometry, color, tags,
@@ -1660,7 +1693,7 @@ fn build_dataset(conn: &Connection) -> rusqlite::Result<Dataset> {
             thumb,   // raw cache path; frontend resolves to an asset URL
             preview, // raw folder-image path; frontend resolves to an asset URL
             dim_w, dim_d, dim_h,
-            file_types, parts_count, real: true, print_status,
+            file_types, parts_count, real: true, print_status, file_model, split_parent,
         });
     }
 
@@ -1868,6 +1901,7 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
         .collect();
 
     let print_status = print_status_of(conn, &id);
+    let (file_model, split_parent) = shelf_facts(&id, &folder, &load_split_dirs(conn));
 
     Ok(Some(Model {
         id, name, creator, collection, geometry, color, tags, files,
@@ -1875,7 +1909,7 @@ fn build_model_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Mode
         parts, extras,
         print_time: None, filament: None, makes: None, volume: None,
         file_count, total_size, thumb, preview, dim_w, dim_d, dim_h,
-        file_types, parts_count, real: true, print_status,
+        file_types, parts_count, real: true, print_status, file_model, split_parent,
     }))
 }
 
@@ -2006,6 +2040,64 @@ pub fn set_print_status(db: State<Db>, model_id: String, status: String) -> Resu
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     write_print_status(&conn, &model_id, &status)?;
     build_dataset(&conn).map_err(|e| e.to_string())
+}
+
+/// Kick a rescan of the library that contains `dir` (after its grouping changed).
+fn rescan_library_of(app: &tauri::AppHandle, db: &State<Db>, dir: &Path) -> Result<Vec<Library>, String> {
+    let (id, path, watch): (String, String, i64) = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let mut st = conn.prepare("SELECT id, path, watch FROM libraries").map_err(|e| e.to_string())?;
+        let libs: Vec<(String, String, i64)> = st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .collect();
+        // The deepest library root that contains the folder (libraries can nest).
+        let lib = libs
+            .into_iter()
+            .filter(|(_, p, _)| dir.starts_with(p))
+            .max_by_key(|(_, p, _)| p.len())
+            .ok_or("That folder isn't inside a library.")?;
+        conn.execute("UPDATE libraries SET status='scanning' WHERE id=?1", params![lib.0])
+            .map_err(|e| e.to_string())?;
+        lib
+    };
+    spawn_scan(app, id, path, watch != 0, false);
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    list_libs(&conn).map_err(|e| e.to_string())
+}
+
+/// Split a folder model into separate models: each loose model file in its folder
+/// becomes its own model and each subfolder groups on its own. Only the index
+/// changes — nothing on disk moves. Starts a rescan; returns the libraries.
+#[tauri::command]
+pub fn split_folder(app: tauri::AppHandle, db: State<Db>, model_id: String) -> Result<Vec<Library>, String> {
+    let folder: String = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let folder: String = conn
+            .query_row("SELECT folder FROM models WHERE id=?1", params![model_id], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or("That model is no longer in the index.")?;
+        if shelf_facts(&model_id, &folder, &HashSet::new()).0 {
+            return Err("A single-file model can't be split.".into());
+        }
+        conn.execute("INSERT OR IGNORE INTO split_dirs (path) VALUES (?1)", params![folder])
+            .map_err(|e| e.to_string())?;
+        folder
+    };
+    rescan_library_of(&app, &db, Path::new(&folder))
+}
+
+/// Undo `split_folder` for `path`: the folder is indexed as one model again.
+#[tauri::command]
+pub fn unsplit_folder(app: tauri::AppHandle, db: State<Db>, path: String) -> Result<Vec<Library>, String> {
+    {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM split_dirs WHERE path=?1", params![path])
+            .map_err(|e| e.to_string())?;
+    }
+    rescan_library_of(&app, &db, Path::new(&path))
 }
 
 /// Setting keys: which slicer "Open in slicer" starts ("bambu" | "orca" |
@@ -2706,7 +2798,7 @@ mod tests {
             Arc::new(move |p, f, m| { d2.lock().unwrap().insert(p, (f, m)); });
         collect_tree(root, Arc::new(AtomicBool::new(false)), 4, on_dir);
         let map = dirs.lock().unwrap().clone();
-        group_models(root, &map)
+        group_models(root, &map, &HashSet::new())
     }
 
     #[test]
@@ -2927,6 +3019,67 @@ mod tests {
             .map(|g| compute_record(&root, &g.dir, 0, g.files.clone()).id)
             .collect();
         assert_eq!(ids.len(), 4, "every model has its own id");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn split_folder_becomes_a_shelf_and_can_be_regrouped() {
+        let root = std::env::temp_dir().join(format!("trove_split_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // A category folder: loose files that are separate things + one project folder.
+        touch(&root.join("Mounts/Clamp.stl"), 700);
+        touch(&root.join("Mounts/Hook.3mf"), 900);
+        touch(&root.join("Mounts/Hook.jpg"), 300);
+        touch(&root.join("Mounts/Monitor Arm/arm.stl"), 1500);
+        touch(&root.join("Mounts/Monitor Arm/base.stl"), 1500);
+        touch(&root.join("Motor/housing.stl"), 1500);
+
+        let mut conn = crate::db::open(&root.join("test.db")).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id,name,type,path,status,last) VALUES ('lib','T','local',?1,'idle','')",
+            params![root.to_string_lossy()],
+        )
+        .unwrap();
+        let names = |conn: &Connection| {
+            let mut v: Vec<String> = build_dataset(conn).unwrap().models.iter().map(|m| m.name.clone()).collect();
+            v.sort();
+            v
+        };
+
+        // Unsplit: the category folder is ONE model that owns its whole subtree.
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(names(&conn), vec!["Motor", "Mounts"]);
+        let ds = build_dataset(&conn).unwrap();
+        assert!(ds.models.iter().all(|m| !m.file_model && m.split_parent.is_none()));
+
+        // Split it: loose files → one model each, the subfolder → its own model.
+        let mounts = root.join("Mounts").to_string_lossy().to_string();
+        conn.execute("INSERT INTO split_dirs (path) VALUES (?1)", params![mounts]).unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(names(&conn), vec!["Clamp", "Hook", "Monitor Arm", "Motor"]);
+        let ds = build_dataset(&conn).unwrap();
+        let by = |n: &str| ds.models.iter().find(|m| m.name == n).unwrap();
+        assert!(by("Clamp").file_model && by("Hook").file_model);
+        assert!(!by("Monitor Arm").file_model && !by("Motor").file_model);
+        assert_eq!(by("Hook").file_count, 2, "same-stem image stays with its file model");
+        assert_eq!(by("Monitor Arm").file_count, 2);
+        // Everything that came out of the split knows where to regroup; Motor doesn't.
+        for n in ["Clamp", "Hook", "Monitor Arm"] {
+            assert_eq!(by(n).split_parent.as_deref(), Some(mounts.as_str()), "{n}");
+        }
+        assert!(by("Motor").split_parent.is_none());
+        // A file model's folder is the real folder its file is in.
+        assert_eq!(by("Clamp").folder, mounts);
+        // The hydrated record agrees with the slim one.
+        let full = build_model_full(&conn, &by("Clamp").id).unwrap().unwrap();
+        assert!(full.file_model);
+        assert_eq!(full.split_parent.as_deref(), Some(mounts.as_str()));
+
+        // Regroup: back to one model, same id as before the split.
+        conn.execute("DELETE FROM split_dirs WHERE path=?1", params![mounts]).unwrap();
+        persist_scan(&mut conn, "lib", &root).unwrap();
+        assert_eq!(names(&conn), vec!["Motor", "Mounts"]);
 
         let _ = fs::remove_dir_all(&root);
     }

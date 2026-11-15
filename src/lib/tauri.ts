@@ -36,6 +36,11 @@ export const api = {
   /** Hand an indexed model file to the slicer (Bambu Studio unless a custom
       command is set in Settings). Rejects with a readable message on failure. */
   openInSlicer: (path: string) => invoke<void>("open_in_slicer", { path }),
+  /** Index a folder model as separate models (its loose files + subfolders).
+      Changes the index only; starts a rescan and returns the libraries. */
+  splitFolder: (modelId: string) => invoke<Library[]>("split_folder", { modelId }),
+  /** Undo splitFolder for a folder path: it becomes one model again. */
+  unsplitFolder: (path: string) => invoke<Library[]>("unsplit_folder", { path }),
   listLibraries: () => invoke<Library[]>("list_libraries"),
   addLibrary: (path: string, name: string | null, options: ScanOptions) =>
     invoke<Library[]>("add_library", { path, name, options }),

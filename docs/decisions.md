@@ -22,6 +22,26 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
+## 2026-11-15 — Below the root, splitting a folder into models is the user's call
+
+**Decision:** a folder model's detail page offers **Split into separate models**. The
+folder's path goes into a `split_dirs` table and every scan treats it as a shelf, exactly
+like a shelf root: loose model files become one model each, subfolders group on their
+own. Models that came out of a split carry `splitParent` and offer **Regroup**, which
+removes the row. Both only change the index and trigger a rescan.
+**Because:** the root-shelf entry below left category folders ("Mounts/" with 12 loose
+files and one project folder) as a single model, and could not fix it by rule: the same
+shape is one model elsewhere ("Motor/" with 20 loose files and `Parts/`).
+**Rejected:** a heuristic on file counts or name similarity — wrong often enough in both
+directions to be worse than asking. A per-library "split everything" switch — would
+shred real multi-part models. Storing the choice as a marker file in the folder — breaks
+*Read-only, forever*.
+**Unsure about:** paths are absolute, so moving or remounting a library orphans its
+`split_dirs` rows (harmless, but the split is lost). Whether "is this a file model" should
+be a stored column instead of derived from `id != hash(folder)`.
+**Affects:** `db.rs` (`split_dirs`), `group_models` (takes the split set), `shelf_facts`,
+`split_folder` / `unsplit_folder`, `Model.fileModel` / `Model.splitParent`, Detail.
+
 ## 2026-11-15 — A library root with loose files beside model folders is a shelf, not a model
 
 **Decision:** when the library root directly holds model files AND has at least one

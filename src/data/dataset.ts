@@ -41,6 +41,12 @@ export const PRINT_STATUSES: { id: Exclude<PrintStatus, "">; label: string }[] =
 export const printStatusOf = (m: Model): PrintStatus => m.printStatus ?? "";
 export const printStatusLabel = (s: PrintStatus) => PRINT_STATUSES.find((x) => x.id === s)?.label ?? "";
 
+/** Whether to offer "Split into separate models": a real folder model (not a
+    single-file one) with more than one file — otherwise there is nothing to split. */
+export const canSplit = (m: Model) => isReal(m) && !m.fileModel && fileCount(m) > 1;
+/** Last path segment, for naming a folder in the UI ("/a/b/Mounts" → "Mounts"). */
+export const folderName = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
+
 /** Slicers "Open in slicer" can start. Ids mirror `slicer_app` in index.rs;
     "custom" runs the command from Settings instead of a known app. */
 export const SLICERS = [

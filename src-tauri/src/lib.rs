@@ -109,6 +109,8 @@ pub fn run() {
             index::delete_collection,
             index::set_print_status,
             index::open_in_slicer,
+            index::split_folder,
+            index::unsplit_folder,
             index::list_libraries,
             index::add_library,
             index::rescan_library,
