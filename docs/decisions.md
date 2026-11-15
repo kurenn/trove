@@ -22,29 +22,25 @@ Supersede rather than delete: write a new entry and say which one it replaces.
 
 ---
 
-## 2026-11-15 — Damaged projects are flagged, and can be moved to the trash
+## 2026-11-15 — Damaged projects are flagged
 
 **Decision:** the embedded-thumbnail pass — the one place that opens `.3mf` files anyway
 — records a project that does not open as an archive in `damaged_files` and skips it, so
-an older intact version can still supply the picture. The model gets a "damaged" badge,
-its page names the file and why, and offers **Move to trash**. That command is the second
-narrow exception to *Read-only*: it only accepts a path that is in `damaged_files`,
-re-checks the file on disk first, uses the system trash (restorable) via the `trash`
-crate, and needs a second click. `SCAN_VERSION` 7 → 8 so existing libraries get checked.
+an older intact version can still supply the picture. The model gets a "damaged" badge
+and its page names the file and why. `SCAN_VERSION` 7 → 8 so existing libraries get
+checked.
 **Because:** a copy that was cut short (an SD-card backup, an interrupted download) looks
 like any other project until it fails to preview with no reason given; the user then
 has nothing to act on.
-**Rejected:** a general "delete file" button — Trove is not a file manager, and a
-library tool that deletes on request eventually deletes the wrong thing. Permanent
-deletion — nothing here is worth being unrecoverable. Validating every archive on every
-scan — it opens every project file each time; only models still lacking a picture are
-checked, which is where a damaged file shows.
+**Rejected:** offering to delete the file — *Read-only, forever*; the page reveals it in
+the file manager instead. Validating every archive on every scan — it opens every
+project file each time; only models still lacking a picture are checked, which is where
+a damaged file shows.
 **Unsure about:** a damaged OLDER version of a model that already has a picture is never
 opened, so never flagged. "Not a readable zip" also flags a `.3mf` that is some other
 format entirely — arguably also "can't be opened", but the wording says "incomplete".
 **Affects:** `generate_image_thumbs`, `archive_is_readable` / `note_damaged`,
-`trash_damaged_file`, `Model.damaged` / `ModelFile.damaged`, the panel on Detail, the
-`trash` dependency.
+`Model.damaged` / `ModelFile.damaged`, the panel on Detail.
 
 ## 2026-11-15 — Copies and dotted versions join the version logic; renames are index-only
 
@@ -84,29 +80,19 @@ layer per badge per card. This is a likely cause, not a measured one.
 unoptimized Rust) is slow in its own right, so judge it in a release build.
 **Affects:** `main.tsx`, `app.css`.
 
-## 2026-11-15 — One exception to read-only: moving a loose file into its folder, on request
+## 2026-11-15 — A loose file next to its same-named folder is pointed out, not moved
 
 **Decision:** a loose-file model with a same-named folder model right next to it
 (`Stand_v4.3mf` beside `Stand/`; names compared on letters and digits only) is flagged —
-a "loose copy" badge on its card, a suggestion on its page. Confirming it moves the
-model's files into that folder. This narrows *Read-only, forever* (below) for this fork;
-it does not replace it. The limits are the point: only on an explicit two-step click,
-only `rename` within one filesystem (never copy + delete, so no half-written files and
-no cross-device moves), never overwriting (a taken name becomes `name (2).ext`), never
-deleting. Plate ticks follow the moved file.
+a "loose copy" badge on its card, a note on its page with **Open folder**.
 **Because:** slicers save next to wherever a file was opened from, so projects leak
-loose copies into the parent folder; Trove can see that precisely, and "go fix it in
-the file manager" wastes the one moment the user is looking at it.
-**Rejected:** doing it automatically, or in bulk across the library — one wrong match
-then relocates many files. Overwriting an older same-named file — the two can differ
-(they did in the case that prompted this), and Trove can't know which one matters.
-Merging the loose file into the folder model in the index only — the mess on disk stays.
-**Unsure about:** `name (2).3mf` is safe but ugly, and it hides the file from version
-detection; suggesting the next free version number instead might be better. Whether
-upstream would want this at all — it is kept in its own commit so the rest stays
-offerable without it.
-**Affects:** `folder_homes` / `belongs_to` / `plan_moves` / `move_into_folder`,
-`Model.belongsTo`, the suggestion panel on Detail, the card badge.
+loose copies into the parent folder; Trove can see that precisely.
+**Rejected:** moving the file into the folder for the user — *Read-only, forever*.
+Merging the loose file into the folder model in the index only — it would hide a mess
+that is still there on disk.
+**Unsure about:** whether a hint without an action is worth the badge.
+**Affects:** `folder_homes` / `belongs_to`, `Model.belongsTo`, the note on Detail, the
+card badge.
 
 ## 2026-11-15 — Versions are read from file names; plates are read from the project on demand
 

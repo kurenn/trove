@@ -136,7 +136,7 @@ pub struct Model {
     #[serde(rename = "splitParent", default, skip_serializing_if = "Option::is_none")]
     pub split_parent: Option<String>,
     /// For a loose-file model: the folder model right next to it with the same
-    /// name — where this file most likely belongs (the UI offers to move it there).
+    /// name — where this file most likely belongs (the UI points it out).
     #[serde(rename = "belongsTo", default, skip_serializing_if = "Option::is_none")]
     pub belongs_to: Option<String>,
     /// True when the model holds a copy of one of its own files — the same name

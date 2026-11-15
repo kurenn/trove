@@ -199,12 +199,10 @@
 .title-edit-btn { border: none; background: none; color: var(--ink-3); cursor: pointer; padding: 2px; opacity: 0; transition: opacity .12s; }
 .title-edit:hover .title-edit-btn, .title-edit-btn:focus-visible { opacity: 1; }
 .title-input { width: 100%; font-family: var(--font-display); font-size: 22px; font-weight: 700; height: 40px; }
-/* Damaged files: badge, warning panel, and the trash confirmation. */
+/* Damaged files: badge and warning panel. */
 .danger-badge { background: #b3372b; color: #fff; backdrop-filter: none; }
 .no-backdrop-blur .card-badge.danger-badge { background: #b3372b; }
 .danger-panel { border-color: color-mix(in srgb, #b3372b 55%, var(--line)); }
-.damaged-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
-.btn-danger { background: #b3372b; border-color: #b3372b; color: #fff; }
 /* Suggestions (a loose file that belongs in the folder next to it). */
 .hint-badge { background: #c98a1b; color: #fff; backdrop-filter: none; }
 .hint-panel { border-color: color-mix(in srgb, #c98a1b 55%, var(--line)); }

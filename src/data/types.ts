@@ -129,7 +129,7 @@ export interface Model {
   /** The folder this model was split out of by the user, if any (offer to regroup). */
   splitParent?: string;
   /** For a loose-file model: the same-named folder next to it, where it most
-      likely belongs (offer to move it there). */
+      likely belongs (pointed out on its page). */
   belongsTo?: string;
   /** True when the model holds a "(2)"-style copy of one of its own files. */
   duplicates?: boolean;

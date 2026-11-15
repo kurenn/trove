@@ -52,13 +52,6 @@ export const api = {
   getPlates: (path: string) => invoke<Plate[]>("get_plates", { path }),
   setPlatePrinted: (path: string, plate: number, printed: boolean) =>
     invoke<void>("set_plate_printed", { path, plate, printed }),
-  /** Move a loose-file model's files into the same-named folder next to it.
-      The one command that changes the library on disk: renames only, never
-      overwrites (a clashing name gets " (2)"), never deletes. Starts a rescan. */
-  moveIntoFolder: (modelId: string) => invoke<Library[]>("move_into_folder", { modelId }),
-  /** Move a file Trove marked as damaged to the system trash (restorable).
-      Refused for any other file. Starts a rescan. */
-  trashDamagedFile: (path: string) => invoke<Library[]>("trash_damaged_file", { path }),
   listLibraries: () => invoke<Library[]>("list_libraries"),
   addLibrary: (path: string, name: string | null, options: ScanOptions) =>
     invoke<Library[]>("add_library", { path, name, options }),

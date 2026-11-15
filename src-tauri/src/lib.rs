@@ -116,8 +116,6 @@ pub fn run() {
             index::set_plate_printed,
             index::split_folder,
             index::unsplit_folder,
-            index::move_into_folder,
-            index::trash_damaged_file,
             index::list_libraries,
             index::add_library,
             index::rescan_library,

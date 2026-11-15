@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Icon, Avatar, Tag } from "../components/Icons";
 import { Thumb, Viewer3D, type ViewerMode } from "../three/Viewer";
 import { MiniCard } from "../components/cards";
-import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, fileCount, cadFile, formatsOf, plateProject, plateLabel, versionFiles, type SlicerId } from "../data/dataset";
+import { useDataset, creatorById, collectionById, similar, modelDims, fmtDate, fmtSize, nModels, slicerFile, printStatusOf, PRINT_STATUSES, slicerId, slicerButtonName, canSplit, folderName, cadFile, formatsOf, plateProject, plateLabel, versionFiles, type SlicerId } from "../data/dataset";
 import { CollectionMenu } from "../components/CollectionMenu";
 import { useApp } from "../lib/store";
 import { isTauri, api, revealInManager, copyText, loadConvert } from "../lib/tauri";
@@ -185,17 +185,9 @@ export function DetailScreen({ model }: { model: Model }) {
   };
   const split = () => regroup(() => api.splitFolder(m.id), `Splitting “${m.name}” into separate models…`);
   const unsplit = () => m.splitParent && regroup(() => api.unsplitFolder(m.splitParent!), `Regrouping “${folderName(m.splitParent)}”…`);
-  // A loose file next to a folder of the same name: offer to move it in. This is
-  // the one action that changes files on disk, so it takes a second, explicit click.
-  const [confirmMove, setConfirmMove] = useState(false);
-  useEffect(() => { setConfirmMove(false); }, [m.id]);
-  const moveIn = () => m.belongsTo && regroup(() => api.moveIntoFolder(m.id), `Moved into “${folderName(m.belongsTo)}”`);
-  // Damaged files (unreadable archives). Each can go to the system trash — a
-  // second explicit click, and restorable from there. `trashAsk` = path awaiting it.
+  // Damaged files (unreadable archives) — named on the page so the missing
+  // preview has an explanation.
   const damagedFiles = m.files.filter((f) => f.damaged && f.path);
-  const [trashAsk, setTrashAsk] = useState<string | null>(null);
-  useEffect(() => { setTrashAsk(null); }, [m.id]);
-  const trash = (f: ModelFile) => regroup(() => api.trashDamagedFile(f.path!), `Moved ${f.name} to the trash`);
   const copyPath = async () => {
     try { await copyText(m.folder); toast("Path copied to clipboard"); }
     catch { toast("Path copied to clipboard"); }
@@ -377,20 +369,14 @@ export function DetailScreen({ model }: { model: Model }) {
                 {damagedFiles.length > 1 ? "These files are" : "This file is"} incomplete — the archive has no table of contents, as after a copy that was cut short. No slicer can open {damagedFiles.length > 1 ? "them" : "it"}, which is also why there is no preview.
               </p>
               {damagedFiles.map((f) =>
-                <div key={f.path} className="damaged-row">
+                <button key={f.path} className="part-row" onClick={() => revealFile(f.path)} title="Reveal in folder">
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="file-name">{f.name}</div>
                     <div className="file-sub">{fmtSize(f.size)}</div>
                   </div>
-                  {trashAsk !== f.path
-                    ? <button className="btn btn-sm" onClick={() => setTrashAsk(f.path!)}>Move to trash…</button>
-                    : <>
-                        <button className="btn btn-sm btn-danger" onClick={() => trash(f)}>Move to trash</button>
-                        <button className="btn btn-sm" onClick={() => setTrashAsk(null)}>Cancel</button>
-                      </>}
-                </div>
+                  <Icon name="folder" size={16} style={{ color: "var(--ink-3)", flexShrink: 0 }} />
+                </button>
               )}
-              <p className="faint" style={{ fontSize: 12, margin: "8px 0 0" }}>The file goes to your system trash and can be restored from there.</p>
             </div>
           }
 
@@ -398,19 +384,9 @@ export function DetailScreen({ model }: { model: Model }) {
             <div className="panel hint-panel">
               <div className="panel-h"><Icon name="folder" size={18} /> Belongs in “{folderName(m.belongsTo)}”?</div>
               <p className="muted" style={{ fontSize: 13, margin: "0 0 10px" }}>
-                This loose file sits right next to a folder of the same name. Moving it in keeps the project together — it then shows up as a part (or a new version) of that model.
+                This loose file sits right next to a folder of the same name. Moved into that folder, it would show up as a part (or a new version) of that model. Trove never moves files itself.
               </p>
-              {!confirmMove
-                ? <button className="btn" style={{ width: "100%" }} onClick={() => setConfirmMove(true)}><Icon name="folder" size={16} /> Move into “{folderName(m.belongsTo)}”…</button>
-                : <>
-                    <p style={{ fontSize: 13, margin: "0 0 10px" }}>
-                      Move {fileCount(m)} file{fileCount(m) === 1 ? "" : "s"} on disk into <b>{m.belongsTo}</b>? Nothing is overwritten: a file whose name is already taken there is added as “name (2)”.
-                    </p>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button className="btn btn-primary" style={{ flex: 1 }} onClick={moveIn}>Move files</button>
-                      <button className="btn" style={{ flex: 1 }} onClick={() => setConfirmMove(false)}>Cancel</button>
-                    </div>
-                  </>}
+              <button className="btn" style={{ width: "100%" }} onClick={openFolder}><Icon name="folder" size={16} /> Open folder</button>
             </div>
           }
 
